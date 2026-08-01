@@ -117,7 +117,10 @@ async function init(){
     byDay = new Map(RAW.map(r => [r.d, r]));
     const maxD = Math.max(...RAW.map(r => r.d));
     dataWeeks = Math.max(1, Math.ceil(maxD / 7));
-    numWeeks = PROGRAM_WEEKS;   // 週次は全12週を表示（未来週は空＝達成率0）
+    // 週次は「プログラム想定期間(PROGRAM_WEEKS)」と「実績のある週数」の大きい方まで表示する。
+    // 12週を決め打ちすると、それを超えて継続した分（Day85以降）が週次集計・累計から
+    // 丸ごと欠落し、詳細タブの全期間合計と食い違う。
+    numWeeks = Math.max(PROGRAM_WEEKS, dataWeeks);
     selWeek = dataWeeks;        // 日次の初期表示は最新のデータ週
     document.getElementById('loading').style.display='none';
     document.getElementById('main').style.display='block';
