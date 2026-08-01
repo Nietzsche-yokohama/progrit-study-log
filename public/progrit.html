@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>PROGRIT 学習ダッシュボード</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@300;400;500;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  :root{
+    --bg:#0d1117;--card:#161b22;--card2:#1c2128;--border:#30363d;
+    --text:#e6edf3;--muted:#8b949e;--accent:#58a6ff;
+    --shadow:#4FC3F7;--speed:#81C784;--oral:#FFB74D;--vocab:#CE93D8;--listen:#F06292;--speech:#FFD54F;
+  }
+  body{background:var(--bg);color:var(--text);font-family:'Noto Sans JP',sans-serif;min-height:100vh;padding:20px}
+  h1{text-align:center;font-size:1.6rem;font-weight:700;margin-bottom:4px;background:linear-gradient(90deg,#58a6ff,#a5d6ff);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+  .subtitle{text-align:center;color:var(--muted);font-size:.85rem;margin-bottom:28px}
+  .badge{display:inline-block;background:#1c2128;border:1px solid #30363d;border-radius:20px;padding:2px 12px;font-size:.75rem;color:#58a6ff;margin:0 4px}
+
+  /* loading */
+  #loading{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:80vh;gap:16px}
+  .spinner{width:36px;height:36px;border:3px solid #30363d;border-top-color:#58a6ff;border-radius:50%;animation:spin .8s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .load-txt{color:var(--muted);font-size:.85rem}
+  .error-txt{color:#f85149;font-size:.9rem}
+  #main{display:none}
+
+  /* KPI */
+  .kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;margin-bottom:28px}
+  .kpi{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:18px 16px;text-align:center}
+  .kpi .val{font-size:2rem;font-weight:700;line-height:1.1}
+  .kpi .lbl{font-size:.72rem;color:var(--muted);margin-top:4px}
+  .kpi .sub{font-size:.7rem;color:#58a6ff;margin-top:2px}
+  .kpi.hl{border-color:#58a6ff33;background:linear-gradient(135deg,#161b22,#1c2128)}
+
+  /* Grid layouts */
+  .row2{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px}
+  .row3{display:grid;grid-template-columns:2fr 1fr;gap:16px;margin-bottom:16px}
+  @media(max-width:900px){.row2,.row3{grid-template-columns:1fr}}
+
+  /* Cards */
+  .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:20px}
+  .card h3{font-size:.9rem;font-weight:500;color:var(--muted);margin-bottom:14px;letter-spacing:.5px}
+  .chart-wrap{position:relative}
+  .chart-wrap canvas{max-height:280px}
+  .chart-tall canvas{max-height:340px}
+  .chart-sm canvas{max-height:220px}
+
+  /* Subject legend */
+  .legend{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}
+  .leg-item{display:flex;align-items:center;gap:5px;font-size:.75rem}
+  .leg-dot{width:10px;height:10px;border-radius:50%}
+
+  /* Subject totals */
+  .subj-list{display:flex;flex-direction:column;gap:10px}
+  .subj-row{display:flex;align-items:center;gap:10px}
+  .subj-name{font-size:.8rem;width:90px;flex-shrink:0}
+  .bar-wrap{flex:1;height:8px;background:#30363d;border-radius:4px;overflow:hidden}
+  .bar-fill{height:100%;border-radius:4px;transition:width .3s}
+  .subj-mins{font-size:.75rem;color:var(--muted);width:55px;text-align:right}
+
+  /* DOW table */
+  .dow-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:8px}
+  .dow-cell{background:var(--card2);border-radius:8px;padding:10px 6px;text-align:center}
+  .dow-cell .day{font-size:.7rem;color:var(--muted)}
+  .dow-cell .avg{font-size:1.1rem;font-weight:700}
+  .dow-cell .n{font-size:.65rem;color:var(--muted)}
+  .dow-cell.hi{border:1px solid #58a6ff55;background:linear-gradient(135deg,#1c2128,#16213e)}
+
+  /* Insights */
+  .insight-list{display:flex;flex-direction:column;gap:10px}
+  .insight{background:var(--card2);border-left:3px solid #58a6ff;border-radius:0 8px 8px 0;padding:10px 14px}
+  .insight.warn{border-color:#FFB74D}
+  .insight.good{border-color:#81C784}
+  .insight .icon{font-size:1rem;margin-right:6px}
+  .insight .txt{font-size:.82rem;line-height:1.6}
+  .insight .txt strong{color:var(--text)}
+
+  footer{text-align:center;color:#484f58;font-size:.72rem;margin-top:28px;padding-top:16px;border-top:1px solid var(--border)}
+</style>
+</head>
+<body>
+
+<div id="loading">
+  <div class="spinner"></div>
+  <div class="load-txt">Slackから学習データを取得中…</div>
+</div>
+
+<div id="main">
+  <h1>🎓 PROGRIT 学習ダッシュボード</h1>
+  <div class="subtitle" id="subtitle"></div>
+
+  <div class="kpi-grid" id="kpiGrid"></div>
+
+  <div class="row3">
+    <div class="card chart-tall">
+      <h3>📅 日別学習時間（分）</h3>
+      <div class="chart-wrap" style="height:320px"><canvas id="dailyChart"></canvas></div>
+    </div>
+    <div class="card">
+      <h3>📊 科目別内訳</h3>
+      <div class="chart-wrap" style="height:200px;display:flex;align-items:center;justify-content:center">
+        <canvas id="donutChart"></canvas>
+      </div>
+      <div class="subj-list" style="margin-top:16px" id="subjList"></div>
+    </div>
+  </div>
+
+  <div class="row2">
+    <div class="card">
+      <h3>📚 科目別積み上げ（日別）</h3>
+      <div class="legend">
+        <span class="leg-item"><span class="leg-dot" style="background:var(--shadow)"></span>シャドーイング</span>
+        <span class="leg-item"><span class="leg-dot" style="background:var(--speed)"></span>速読</span>
+        <span class="leg-item"><span class="leg-dot" style="background:var(--oral)"></span>口頭英作文</span>
+        <span class="leg-item"><span class="leg-dot" style="background:var(--vocab)"></span>単語</span>
+        <span class="leg-item"><span class="leg-dot" style="background:var(--listen)"></span>多聴</span>
+        <span class="leg-item"><span class="leg-dot" style="background:var(--speech)"></span>1分間スピーチ</span>
+      </div>
+      <div class="chart-wrap" style="height:260px"><canvas id="stackedChart"></canvas></div>
+    </div>
+    <div class="card">
+      <h3>📆 曜日別平均（分）</h3>
+      <div class="dow-grid" style="margin-bottom:16px" id="dowGrid"></div>
+      <div class="chart-wrap" style="height:170px"><canvas id="dowChart"></canvas></div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:16px">
+    <h3>🔄 科目別トレンド（7日移動平均）</h3>
+    <div class="chart-wrap" style="height:220px"><canvas id="trendChart"></canvas></div>
+  </div>
+
+  <div class="card" style="margin-bottom:16px">
+    <h3>💡 インサイトと提言</h3>
+    <div class="insight-list" id="insightList"></div>
+  </div>
+
+  <footer id="footer"></footer>
+</div>
+
+<script>
+const WORKER = 'https://progrit-study-log-worker.ybrnc777.workers.dev/api/progrit';
+const PAGE_VERSION = 'v2026.07.03（1分間スピーチ対応）';
+const C = { shadow:'#4FC3F7', speed:'#81C784', oral:'#FFB74D', vocab:'#CE93D8', listen:'#F06292', speech:'#FFD54F' };
+const DOW_NAMES = ['日','月','火','水','木','金','土'];
+
+async function init() {
+  try {
+    const res = await fetch(WORKER);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
+    if (!data.days || data.days.length === 0) throw new Error('データなし');
+    render(data.days, data.fetchedAt);
+  } catch(e) {
+    document.getElementById('loading').innerHTML =
+      '<div class="error-txt">⚠ データ取得エラー<br><small>' + e.message + '</small></div>';
+  }
+}
+
+function fmt(n) { return n.toLocaleString(); }
+
+function render(RAW, fetchedAt) {
+  // ── 基本計算 ────────────────────────────────
+  const N = RAW.length;
+  const totals = RAW.map(r => r.s + r.sp + r.o + r.v + r.li + (r.sc || 0));
+  const totalMin = totals.reduce((a,b) => a+b, 0);
+  const totalHrs = (totalMin / 60).toFixed(1);
+  const avgMin = (totalMin / N).toFixed(1);
+  const maxMin = Math.max(...totals);
+  const minMin = Math.min(...totals);
+  const maxDay = RAW[totals.indexOf(maxMin)];
+  const minDay = RAW[totals.indexOf(minMin)];
+  const sTotal  = RAW.reduce((a,r) => a+r.s,  0);
+  const spTotal = RAW.reduce((a,r) => a+r.sp, 0);
+  const oTotal  = RAW.reduce((a,r) => a+r.o,  0);
+  const vTotal  = RAW.reduce((a,r) => a+r.v,  0);
+  const liTotal = RAW.reduce((a,r) => a+r.li, 0);
+  const scTotal = RAW.reduce((a,r) => a+(r.sc||0), 0);
+
+  const labels = RAW.map(r => `Day${r.d}\n${r.date}(${r.dow})`);
+  const shortLabels = RAW.map(r => r.date);
+
+  // ── サブタイトル ──────────────────────────────
+  const firstDate = RAW[0].date; const firstDow = RAW[0].dow;
+  const lastDate  = RAW[N-1].date; const lastDow = RAW[N-1].dow;
+  document.getElementById('subtitle').innerHTML =
+    `${firstDate}（${firstDow}） 〜 ${lastDate}（${lastDow}）` +
+    `<span class="badge">${N}日間</span><span class="badge">よこはま（横浜一輝）</span>`;
+
+  // ── KPI ─────────────────────────────────────
+  const subjectCount = [sTotal,spTotal,oTotal,vTotal,liTotal,scTotal].filter(v=>v>0).length;
+  document.getElementById('kpiGrid').innerHTML = `
+    <div class="kpi hl"><div class="val" style="color:#58a6ff">${totalHrs}</div><div class="lbl">総学習時間（時間）</div><div class="sub">${fmt(totalMin)} 分</div></div>
+    <div class="kpi"><div class="val">${avgMin}</div><div class="lbl">日平均（分）</div><div class="sub">${Math.floor(avgMin/60)}時間 ${Math.round(avgMin%60)}分</div></div>
+    <div class="kpi hl"><div class="val" style="color:#81C784">${N}</div><div class="lbl">連続学習日数</div><div class="sub">🔥 皆勤継続中</div></div>
+    <div class="kpi"><div class="val">${maxMin}</div><div class="lbl">最高記録（分）</div><div class="sub">${maxDay.date}（${maxDay.dow}）Day${maxDay.d}</div></div>
+    <div class="kpi"><div class="val" style="color:#F06292">${minMin}</div><div class="lbl">最低記録（分）</div><div class="sub">${minDay.date}（${minDay.dow}）Day${minDay.d}</div></div>
+    <div class="kpi"><div class="val">${subjectCount}</div><div class="lbl">学習科目数</div><div class="sub">${scTotal>0?'最新: 1分間スピーチ 追加':(liTotal>0?'最新: 多聴 追加':'')}</div></div>
+  `;
+
+  // ── 科目リスト ────────────────────────────────
+  const subjData = [
+    {name:'シャドーイング', val:sTotal,  color:C.shadow},
+    {name:'速読',          val:spTotal, color:C.speed},
+    {name:'単語',          val:vTotal,  color:C.vocab},
+    {name:'口頭英作文',    val:oTotal,  color:C.oral},
+    {name:'多聴',          val:liTotal, color:C.listen},
+    {name:'1分間スピーチ', val:scTotal, color:C.speech},
+  ].filter(s => s.val > 0).sort((a,b) => b.val - a.val);
+  const maxSubj = subjData[0]?.val || 1;
+  document.getElementById('subjList').innerHTML = subjData.map(s =>
+    `<div class="subj-row">
+      <span class="subj-name" style="color:${s.color}">${s.name}</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:${(s.val/maxSubj*100).toFixed(1)}%;background:${s.color}"></div></div>
+      <span class="subj-mins">${fmt(s.val)}分</span>
+    </div>`
+  ).join('');
+
+  // ── 曜日別 ───────────────────────────────────
+  const dowGroups = Array.from({length:7}, () => ({sum:0, n:0}));
+  RAW.forEach(r => {
+    const tot = r.s + r.sp + r.o + r.v + r.li + (r.sc || 0);
+    dowGroups[r.dowIdx].sum += tot;
+    dowGroups[r.dowIdx].n++;
+  });
+  const dowAvgs = dowGroups.map(g => g.n ? Math.round(g.sum/g.n) : 0);
+  const dowNs   = dowGroups.map(g => g.n);
+  const maxDow  = Math.max(...dowAvgs);
+  // 月〜日の順で表示 (1,2,3,4,5,6,0)
+  const dowOrder = [1,2,3,4,5,6,0];
+  document.getElementById('dowGrid').innerHTML = dowOrder.map(i => {
+    const isHi = dowAvgs[i] >= maxDow * 0.85 && dowNs[i] > 0;
+    return `<div class="dow-cell${isHi?' hi':''}">
+      <div class="day">${DOW_NAMES[i]}</div>
+      <div class="avg"${isHi?' style="color:#58a6ff"':''}>${dowNs[i]?dowAvgs[i]:'-'}</div>
+      <div class="n">${dowNs[i]}日</div>
+    </div>`;
+  }).join('');
+
+  // ── インサイト ────────────────────────────────
+  // 学習優先順位: ①シャドーイング ②単語・英作文 ③速読・多聴
+  // 「今こうなっているんだ」と気づけて、かつモチベーションが上がる内容にする。
+  const insights = [];
+  const pct = v => totalMin ? Math.round(v / totalMin * 100) : 0;
+  const recentN = Math.min(7, N);
+  const recentAvg = Math.round(RAW.slice(-recentN).reduce((a,r)=>a+r.s+r.sp+r.o+r.v+r.li+(r.sc||0),0) / recentN);
+  const overallAvg = Math.round(totalMin / N);
+
+  // 1. 継続の称賛（モチベの土台）
+  insights.push({type:'good', icon:'🔥', html:
+    `<strong>${N}日連続、1日も休んでいません。</strong>　${firstDate}〜${lastDate}で総学習 <strong>${totalHrs}時間</strong>。これは才能ではなく“続けられる人”である証拠。積み上げた時間は必ずスコアに返ってきます。`});
+
+  // 2. 直近の勢い（維持 or 立て直し）
+  if (recentAvg >= overallAvg) {
+    insights.push({type:'good', icon:'📈', html:
+      `<strong>いま勢いが乗っています。</strong>　直近${recentN}日の平均は <strong>${recentAvg}分/日</strong>で全期間平均 ${overallAvg}分を上回るペース。今の生活リズムが“勝ちパターン”。このまま崩さず維持しましょう。`});
+  } else {
+    insights.push({type:'warn', icon:'📈', html:
+      `<strong>少しペースダウン中。気づけたら大丈夫。</strong>　直近${recentN}日は平均 <strong>${recentAvg}分/日</strong>（全期間平均 ${overallAvg}分）。まずは“最優先のシャドーイングだけは毎日やる”に絞ると立て直しやすいです。`});
+  }
+
+  // 3. 最優先＝シャドーイング
+  const sShare = pct(sTotal);
+  const topIsShadow = sTotal >= Math.max(spTotal, oTotal, vTotal, liTotal, scTotal);
+  if (topIsShadow) {
+    insights.push({type:'good', icon:'🎙️', html:
+      `<strong>最優先のシャドーイングが土台になっています。</strong>　全体の <strong>${sShare}%</strong>（${fmt(sTotal)}分）で全科目中もっとも多く、優先順位どおりに時間を使えています。発音と音声知覚の伸びはここで決まる——いい配分です。`});
+  } else {
+    insights.push({type:'warn', icon:'🎙️', html:
+      `<strong>シャドーイングをもう一押し。</strong>　最優先科目ですが現在 ${sShare}%（${fmt(sTotal)}分）。1日10分の上乗せでも、リスニングとスピーキングの伸びが一気に加速します。ここが最重要です。`});
+  }
+
+  // 4. 優先②＝単語・英作文（インプット→アウトプットの連結）
+  const p2 = vTotal + oTotal;
+  insights.push({type:'', icon:'✍️', html:
+    `<strong>単語＆英作文も着実に積み上がり。</strong>　優先②の2科目で合計 <strong>${fmt(p2)}分</strong>（単語 ${fmt(vTotal)}分／口頭英作文 ${fmt(oTotal)}分）。覚えた単語を英作文ですぐ使うと、“知っている”が“使える”に変わります。`});
+
+  // 5. 単語のムラ（強みを認めつつ安定化を促す）
+  const vocabs = RAW.map(r => r.v);
+  const vocabMax = Math.max(...vocabs), vocabMin = Math.min(...vocabs);
+  if (vocabMax - vocabMin > 60) {
+    const peakDay = RAW[vocabs.indexOf(vocabMax)];
+    insights.push({type:'', icon:'🎯', html:
+      `<strong>単語は“ムラ”を減らすと一気に伸びます。</strong>　Day${peakDay.d}に ${vocabMax}分やり切れる集中力は大きな武器。あとは0分の日を作らず毎日15〜20分を死守できれば、記憶の定着率が確実に上がります。`});
+  }
+
+  // 6. 優先③＝速読・多聴（“ほどよく”でOKという安心材料）
+  const p3 = spTotal + liTotal;
+  const firstLiDay = RAW.find(r => r.li > 0);
+  if (p3 > 0) {
+    const liNote = firstLiDay ? `Day${firstLiDay.d}から多聴も加わり、` : '';
+    insights.push({type:'good', icon:'🎧', html:
+      `<strong>インプットの幅も広がっています。</strong>　${liNote}速読＋多聴で全体の ${pct(p3)}%。優先③らしく“やり過ぎず・切らさず”の配分ができています。耳と速読の土台づくりは順調です。`});
+  }
+
+  // 7. 教材レベルの進化（固定・モチベ）
+  if (sTotal > 0) {
+    insights.push({type:'', icon:'📖', html:
+      `<strong>扱う教材が着実にレベルアップ。</strong>　英検®→Keisuke Honda→CosmoPier と難易度が上がっても継続できているのは、実力が付いてきた証拠。「少し難しい」と感じる今が、一番伸びている瞬間です。`});
+  }
+
+  document.getElementById('insightList').innerHTML = insights.map(ins =>
+    `<div class="insight${ins.type?' '+ins.type:''}">
+      <span class="icon">${ins.icon}</span>
+      <span class="txt">${ins.html}</span>
+    </div>`
+  ).join('');
+
+  // ── フッター ─────────────────────────────────
+  const updatedStr = fetchedAt
+    ? new Date(fetchedAt).toLocaleString('ja-JP', {month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'})
+    : '—';
+  document.getElementById('footer').textContent =
+    `PROGRIT 学習ダッシュボード ${PAGE_VERSION} ｜ データソース: Slack #課外活動_罰金英会話 ｜ 最終更新: ${updatedStr}`;
+
+  // ── Chart.js ─────────────────────────────────
+  const gridColor = '#21262d';
+
+  // 1. Daily bar
+  new Chart(document.getElementById('dailyChart'), {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        label: '合計（分）', data: totals,
+        backgroundColor: totals.map(v => v >= 200 ? '#58a6ff' : v >= 120 ? '#4FC3F766' : '#30363d'),
+        borderRadius: 4
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => ` ${ctx.parsed.y}分` } } },
+      scales: {
+        x: { grid: { color: gridColor }, ticks: { font: { size: 8 }, maxRotation: 90, autoSkip: true, maxTicksLimit: 20 } },
+        y: { grid: { color: gridColor }, ticks: { callback: v => `${v}分` } }
+      }
+    }
+  });
+
+  // 2. Donut
+  const subjTotals = [sTotal, spTotal, oTotal, vTotal, liTotal, scTotal];
+  const donutData = subjTotals.filter(v => v > 0);
+  const donutLabels = ['シャドーイング','速読','口頭英作文','単語','多聴','1分間スピーチ'].filter((_,i) => subjTotals[i] > 0);
+  const donutColors = [C.shadow, C.speed, C.oral, C.vocab, C.listen, C.speech].filter((_,i) => subjTotals[i] > 0);
+  new Chart(document.getElementById('donutChart'), {
+    type: 'doughnut',
+    data: { labels: donutLabels, datasets: [{ data: donutData, backgroundColor: donutColors, borderWidth: 0 }] },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 10 }, color: '#8b949e' } } }
+    }
+  });
+
+  // 3. Stacked bar
+  new Chart(document.getElementById('stackedChart'), {
+    type: 'bar',
+    data: {
+      labels: shortLabels,
+      datasets: [
+        { label: 'シャドーイング', data: RAW.map(r=>r.s),  backgroundColor: C.shadow,  stack: 'a' },
+        { label: '速読',          data: RAW.map(r=>r.sp), backgroundColor: C.speed,   stack: 'a' },
+        { label: '口頭英作文',    data: RAW.map(r=>r.o),  backgroundColor: C.oral,    stack: 'a' },
+        { label: '単語',          data: RAW.map(r=>r.v),  backgroundColor: C.vocab,   stack: 'a' },
+        { label: '多聴',          data: RAW.map(r=>r.li), backgroundColor: C.listen,  stack: 'a' },
+        { label: '1分間スピーチ', data: RAW.map(r=>r.sc||0), backgroundColor: C.speech,  stack: 'a' },
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { stacked: true, grid: { color: gridColor }, ticks: { font: { size: 8 }, maxRotation: 45, autoSkip: true, maxTicksLimit: 15 } },
+        y: { stacked: true, grid: { color: gridColor }, ticks: { callback: v => `${v}分` } }
+      }
+    }
+  });
+
+  // 4. DOW bar (月〜日)
+  new Chart(document.getElementById('dowChart'), {
+    type: 'bar',
+    data: {
+      labels: dowOrder.map(i => DOW_NAMES[i]),
+      datasets: [{
+        label: '平均（分）',
+        data: dowOrder.map(i => dowAvgs[i]),
+        backgroundColor: dowOrder.map(i =>
+          dowAvgs[i] >= maxDow * 0.85 ? '#58a6ff' : '#30363d'
+        ),
+        borderRadius: 4
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { grid: { color: gridColor } },
+        y: { grid: { color: gridColor }, ticks: { callback: v => `${v}分` } }
+      }
+    }
+  });
+
+  // 6. Trend (7-day moving avg)
+  function movAvg(arr, n=7) {
+    return arr.map((_,i) => {
+      const slice = arr.slice(Math.max(0,i-n+1), i+1);
+      return +(slice.reduce((a,b) => a+b, 0) / slice.length).toFixed(1);
+    });
+  }
+  new Chart(document.getElementById('trendChart'), {
+    type: 'line',
+    data: {
+      labels: shortLabels,
+      datasets: [
+        { label:'シャドーイング', data:movAvg(RAW.map(r=>r.s)),  borderColor:C.shadow, backgroundColor:'transparent', tension:0.4, pointRadius:0, borderWidth:2 },
+        { label:'速読',          data:movAvg(RAW.map(r=>r.sp)), borderColor:C.speed,  backgroundColor:'transparent', tension:0.4, pointRadius:0, borderWidth:2 },
+        { label:'口頭英作文',    data:movAvg(RAW.map(r=>r.o)),  borderColor:C.oral,   backgroundColor:'transparent', tension:0.4, pointRadius:0, borderWidth:2 },
+        { label:'単語',          data:movAvg(RAW.map(r=>r.v)),  borderColor:C.vocab,  backgroundColor:'transparent', tension:0.4, pointRadius:0, borderWidth:2 },
+        { label:'1分間スピーチ', data:movAvg(RAW.map(r=>r.sc||0)), borderColor:C.speech, backgroundColor:'transparent', tension:0.4, pointRadius:0, borderWidth:2 },
+      ]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { position:'bottom', labels: { boxWidth:10, font: { size:10 }, color:'#8b949e' } } },
+      scales: {
+        x: { grid: { color: gridColor }, ticks: { font: { size:9 }, maxRotation:45, autoSkip:true, maxTicksLimit:15 } },
+        y: { grid: { color: gridColor }, ticks: { callback: v => `${v}分` } }
+      }
+    }
+  });
+
+  // ── 表示 ──────────────────────────────────────
+  document.getElementById('loading').style.display = 'none';
+  document.getElementById('main').style.display = 'block';
+}
+
+init();
+</script>
+</body>
+</html>

@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>学習記録</title>
+<link rel="icon" href="data:,">
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  html,body{height:100%}
+  body{font-family:system-ui,sans-serif;background:#0d1117}
+  .lx-dash{position:fixed;inset:0;display:flex;flex-direction:column;background:#0d1117}
+  .lx-dash-bar{display:flex;align-items:center;gap:8px;padding:max(10px,env(safe-area-inset-top,10px)) 12px 10px;padding-left:max(12px,env(safe-area-inset-left,12px));background:rgba(13,17,23,.92);border-bottom:1px solid #21262d;z-index:1}
+  .lx-dash-tabs{display:flex;gap:4px}
+  .lx-dash-tab{background:#161b22;border:1px solid #30363d;border-radius:9px;color:#8b949e;padding:7px 14px;font-size:13px;cursor:pointer;font-family:system-ui,sans-serif;font-weight:400}
+  .lx-dash-tab-on{background:#e5a93d;border-color:#e5a93d;color:#15120d;font-weight:700}
+  .lx-dash-frame{flex:1;border:none;width:100%;height:100%;background:#f5f6f8}
+</style>
+</head>
+<body>
+<div class="lx-dash">
+  <div class="lx-dash-bar">
+    <div class="lx-dash-tabs">
+      <button class="lx-dash-tab lx-dash-tab-on" id="tab-weekly">週間面談</button>
+      <button class="lx-dash-tab" id="tab-detail">詳細</button>
+    </div>
+  </div>
+  <iframe class="lx-dash-frame" id="frame" src="/progrit-weekly.html" title="学習記録ダッシュボード"></iframe>
+</div>
+<script>
+  const TABS = {
+    weekly: { src: '/progrit-weekly.html', btn: document.getElementById('tab-weekly') },
+    detail: { src: '/progrit.html', btn: document.getElementById('tab-detail') },
+  };
+  const frame = document.getElementById('frame');
+  function setTab(key) {
+    Object.entries(TABS).forEach(([k, t]) => t.btn.classList.toggle('lx-dash-tab-on', k === key));
+    frame.src = TABS[key].src;
+  }
+  TABS.weekly.btn.onclick = () => setTab('weekly');
+  TABS.detail.btn.onclick = () => setTab('detail');
+</script>
+</body>
+</html>

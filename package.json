@@ -1,0 +1,17 @@
+{
+  "name": "progrit-study-log",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler pages dev public",
+    "worker:dev": "wrangler dev worker/index.ts --local",
+    "worker:deploy": "wrangler deploy worker/index.ts",
+    "pages:deploy": "wrangler pages deploy public --project-name progrit-study-log"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20240909.0",
+    "typescript": "^5.5.3",
+    "wrangler": "^4.95.0"
+  }
+}

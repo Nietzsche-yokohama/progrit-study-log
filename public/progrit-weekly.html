@@ -1,0 +1,286 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>進捗</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  :root{
+    --bg:#f5f6f8;--card:#ffffff;--border:#e7e9ee;--text:#2b2f36;--muted:#9aa0ab;
+    --accent:#e5a93d;
+    /* 5カテゴリー */
+    --c-vocab:#e08389;   /* 単語 */
+    --c-percep:#5b9bd5;  /* 音声知覚 */
+    --c-mean:#3fa897;    /* 意味理解 */
+    --c-concept:#9ccb6b; /* 概念化 */
+    --c-sent:#f0986c;    /* 文章化 */
+    --c-speech:#c9a4e0;  /* 1分間スピーチ */
+  }
+  body{background:var(--bg);color:var(--text);font-family:'Noto Sans JP',sans-serif;min-height:100vh;padding:18px 16px 40px}
+  .wrap{max-width:980px;margin:0 auto}
+
+  /* header */
+  .topbar{display:flex;align-items:center;justify-content:center;gap:14px;margin-bottom:14px}
+  .navbtn{width:34px;height:34px;border:none;border-radius:7px;background:var(--accent);color:#fff;font-size:16px;cursor:pointer;display:flex;align-items:center;justify-content:center;line-height:1}
+  .navbtn:disabled{opacity:.3;cursor:default}
+  .topttl{font-size:1.5rem;font-weight:700}
+
+  /* tabs */
+  .tabs{display:flex;gap:24px;border-bottom:1px solid var(--border);margin-bottom:22px}
+  .tab{background:none;border:none;padding:10px 2px;font-size:.95rem;color:var(--muted);cursor:pointer;font-family:inherit;border-bottom:2px solid transparent;margin-bottom:-1px}
+  .tab.on{color:var(--accent);border-bottom-color:var(--accent);font-weight:700}
+
+  .sec-h{font-size:1.15rem;font-weight:700;margin-bottom:14px}
+  .sec-h .range{font-size:.8rem;color:var(--muted);font-weight:400;margin-left:8px}
+
+  .card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:22px 20px;box-shadow:0 1px 2px rgba(0,0,0,.03)}
+
+  .kpis{display:flex;flex-wrap:wrap;gap:34px;margin-bottom:18px}
+  .kpi .lbl{font-size:.8rem;color:var(--muted);margin-bottom:4px}
+  .kpi .val{font-size:1.9rem;font-weight:700;color:var(--accent)}
+  .kpi .val small{font-size:.85rem;color:var(--text);font-weight:500;margin-left:3px}
+
+  .chart-wrap{position:relative;height:420px}
+
+  #loading{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:70vh;gap:14px}
+  .spinner{width:34px;height:34px;border:3px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .load-txt{color:var(--muted);font-size:.85rem}
+  .error-txt{color:#d9534f;font-size:.9rem;text-align:center}
+  #main{display:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div id="loading">
+    <div class="spinner"></div>
+    <div class="load-txt">学習データを取得中…</div>
+  </div>
+
+  <div id="main">
+    <div class="topbar">
+      <button class="navbtn" id="prevBtn">‹</button>
+      <div class="topttl" id="topTitle">進捗</div>
+      <button class="navbtn" id="nextBtn">›</button>
+    </div>
+
+    <div class="tabs">
+      <button class="tab on" id="tabDaily">日次進捗</button>
+      <button class="tab" id="tabWeekly">週次進捗</button>
+    </div>
+
+    <div class="sec-h">学習状況<span class="range" id="rangeLbl"></span></div>
+    <div class="card">
+      <div class="kpis" id="kpis"></div>
+      <div class="chart-wrap"><canvas id="chart"></canvas></div>
+    </div>
+    <div style="text-align:center;color:var(--muted);font-size:.7rem;margin-top:14px">v2026.07.03（1分間スピーチ対応）</div>
+  </div>
+</div>
+
+<script>
+const WORKER = 'https://progrit-study-log-worker.ybrnc777.workers.dev/api/progrit';
+const GOAL_H = 2.5;              // 1日の目標学習時間
+const GOAL_MIN = GOAL_H * 60;    // = 150分
+const PROGRAM_WEEKS = 12;        // プログラム全期間（週次タブはこの週数まで表示）
+const DOW = ['日','月','火','水','木','金','土'];
+const CAT = [
+  { key:'v',  name:'単語',     css:'--c-vocab' },
+  { key:'s',  name:'音声知覚', css:'--c-percep' },
+  { key:'sp', name:'意味理解', css:'--c-mean' },
+  { key:'li', name:'概念化',   css:'--c-concept' },
+  { key:'o',  name:'文章化',   css:'--c-sent' },
+  { key:'sc', name:'スピーチ', css:'--c-speech' },
+];
+function cssvar(v){ return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+
+let RAW = [];          // worker days
+let byDay = new Map(); // d -> record
+let dataWeeks = 1;     // 実績のある週数（日次タブのナビ上限・初期表示）
+let numWeeks = PROGRAM_WEEKS; // 週次タブで表示する週数（プログラム全期間）
+let selWeek = 1;       // 選択中の週（日次タブ用）
+let mode = 'daily';
+let chart = null;
+
+async function init(){
+  try{
+    const res = await fetch(WORKER);
+    if(!res.ok) throw new Error('HTTP '+res.status);
+    const data = await res.json();
+    if(!data.days || !data.days.length) throw new Error('データなし');
+    RAW = data.days;
+    byDay = new Map(RAW.map(r => [r.d, r]));
+    const maxD = Math.max(...RAW.map(r => r.d));
+    dataWeeks = Math.max(1, Math.ceil(maxD / 7));
+    numWeeks = PROGRAM_WEEKS;   // 週次は全12週を表示（未来週は空＝達成率0）
+    selWeek = dataWeeks;        // 日次の初期表示は最新のデータ週
+    document.getElementById('loading').style.display='none';
+    document.getElementById('main').style.display='block';
+    bindUI();
+    render();
+  }catch(e){
+    document.getElementById('loading').innerHTML =
+      '<div class="error-txt">⚠ データ取得エラー<br><small>'+e.message+'</small></div>';
+  }
+}
+
+function bindUI(){
+  document.getElementById('tabDaily').onclick = () => { mode='daily'; syncTabs(); render(); };
+  document.getElementById('tabWeekly').onclick = () => { mode='weekly'; syncTabs(); render(); };
+  document.getElementById('prevBtn').onclick = () => { if(selWeek>1){selWeek--; render();} };
+  document.getElementById('nextBtn').onclick = () => { if(selWeek<dataWeeks){selWeek++; render();} };
+}
+function syncTabs(){
+  document.getElementById('tabDaily').classList.toggle('on', mode==='daily');
+  document.getElementById('tabWeekly').classList.toggle('on', mode==='weekly');
+}
+
+// sc（スピーチ）は途中から追加された科目のため、古いレコードには存在しない → ||0 で吸収
+const tot = r => r ? (r.s+r.sp+r.o+r.v+r.li+(r.sc||0)) : 0;
+// 学習1日目=2026/4/24 からd番号の実日付を求める
+const BASE = Date.UTC(2026,3,24);
+function dateOf(d){ return new Date(BASE + (d-1)*86400000); }
+function dlabel(d){ const dt=dateOf(d); return `${dt.getUTCMonth()+1}/${dt.getUTCDate()}(${DOW[dt.getUTCDay()]})`; }
+
+function render(){
+  const isDaily = mode==='daily';
+  document.getElementById('topTitle').textContent = isDaily ? `進捗 Week ${selWeek}` : '進捗';
+  // 週ナビは日次タブのみ（週次は全期間を一覧表示するため非表示）
+  document.getElementById('prevBtn').style.visibility = isDaily ? 'visible' : 'hidden';
+  document.getElementById('nextBtn').style.visibility = isDaily ? 'visible' : 'hidden';
+  document.getElementById('prevBtn').disabled = selWeek<=1;
+  document.getElementById('nextBtn').disabled = selWeek>=dataWeeks;
+
+  if(isDaily) renderDaily();
+  else renderWeekly();
+}
+
+function setKpis(items){
+  document.getElementById('kpis').innerHTML = items.map(it =>
+    `<div class="kpi"><div class="lbl">${it.lbl}</div><div class="val">${it.val}<small>${it.unit||''}</small></div></div>`
+  ).join('');
+}
+
+function renderDaily(){
+  const startD = (selWeek-1)*7 + 1;
+  const days = [];
+  for(let i=0;i<7;i++){ const d=startD+i; days.push({ d, r: byDay.get(d) }); }
+
+  const labels = days.map(x => dlabel(x.d));
+  const totalMin = days.reduce((a,x)=>a+tot(x.r),0);
+  const totalH = totalMin/60;
+  const avgH = totalH/7;
+  const achv = Math.round(totalMin / (GOAL_MIN*7) * 100);
+
+  document.getElementById('rangeLbl').textContent = '';
+  setKpis([
+    { lbl:'累計学習時間（週）', val:totalH.toFixed(1), unit:'時間' },
+    { lbl:'平均学習時間（週）', val:avgH.toFixed(1), unit:'時間/日' },
+    { lbl:'達成率（週）',       val:achv, unit:'%' },
+  ]);
+
+  const catDatasets = CAT.map(c => ({
+    label:c.name, stack:'actual',
+    data: days.map(x => x.r ? +( (x.r[c.key]||0)/60 ).toFixed(2) : 0),
+    backgroundColor: cssvar(c.css), borderWidth:0, borderRadius:2,
+  }));
+  const targetDataset = {
+    label:'目標(2.5h)', stack:'target',
+    data: days.map(()=>GOAL_H),
+    backgroundColor:'rgba(180,185,195,.18)', borderWidth:0, borderRadius:2,
+  };
+  const lineDataset = {
+    label:'達成率', type:'line', yAxisID:'y1',
+    data: days.map(x => Math.round(tot(x.r)/GOAL_MIN*100)),
+    borderColor: cssvar('--accent'), backgroundColor: cssvar('--accent'),
+    borderWidth:2, tension:0, pointRadius:3, pointBackgroundColor:'#fff', pointBorderWidth:2,
+  };
+  drawChart(labels, [targetDataset, ...catDatasets, lineDataset], '時間', 140);
+}
+
+function renderWeekly(){
+  const labels=[], totalsH=[], achvs=[], cats={};
+  CAT.forEach(c=>cats[c.key]=[]);
+  let grand=0, grandDays=0;
+  for(let w=1; w<=numWeeks; w++){
+    const startD=(w-1)*7+1;
+    let wMin=0;
+    CAT.forEach(c=>cats[c.key].push(0));
+    for(let i=0;i<7;i++){
+      const r=byDay.get(startD+i);
+      if(r){ wMin+=tot(r); CAT.forEach((c,ci)=>{ cats[c.key][w-1]+= (r[c.key]||0)/60; }); }
+    }
+    // X軸ラベルは2段表示（"Week N" ＋ 日付レンジ）
+    const ws=dateOf(startD), we=dateOf(startD+6);
+    const md=dt=>`${String(dt.getUTCMonth()+1).padStart(2,'0')}/${String(dt.getUTCDate()).padStart(2,'0')}`;
+    labels.push(['Week '+w, `${md(ws)}-${md(we)}`]);
+    totalsH.push(+(wMin/60).toFixed(2));
+    achvs.push(Math.round(wMin/(GOAL_MIN*7)*100));
+    grand+=wMin;
+  }
+  CAT.forEach(c=>{ cats[c.key]=cats[c.key].map(v=>+v.toFixed(2)); });
+
+  const maxD = Math.max(...RAW.map(r=>r.d));
+  const totalH=grand/60;
+  const avgH=totalH/maxD;
+  const achv=Math.round(grand/(GOAL_MIN*maxD)*100);
+  const first=dateOf(1), last=dateOf(maxD);
+  const fmt=dt=>`${dt.getUTCFullYear()}/${String(dt.getUTCMonth()+1).padStart(2,'0')}/${String(dt.getUTCDate()).padStart(2,'0')} (${DOW[dt.getUTCDay()]})`;
+  document.getElementById('rangeLbl').textContent = `${fmt(first)} - ${fmt(last)}`;
+  setKpis([
+    { lbl:'累計学習時間（全期間）', val:totalH.toFixed(1), unit:'時間' },
+    { lbl:'平均学習時間（全期間）', val:avgH.toFixed(1), unit:'時間/日' },
+    { lbl:'達成率（全期間）',       val:achv, unit:'%' },
+  ]);
+
+  const catDatasets = CAT.map(c => ({
+    label:c.name, stack:'actual', data:cats[c.key],
+    backgroundColor:cssvar(c.css), borderWidth:0, borderRadius:2,
+  }));
+  const targetDataset = {
+    label:'目標', stack:'target', data:labels.map(()=>GOAL_H*7),
+    backgroundColor:'rgba(180,185,195,.18)', borderWidth:0, borderRadius:2,
+  };
+  const lineDataset = {
+    label:'達成率', type:'line', yAxisID:'y1', data:achvs,
+    borderColor:cssvar('--accent'), backgroundColor:cssvar('--accent'),
+    borderWidth:2, tension:0, pointRadius:3, pointBackgroundColor:'#fff', pointBorderWidth:2,
+  };
+  drawChart(labels, [targetDataset, ...catDatasets, lineDataset], '時間', 120);
+}
+
+function drawChart(labels, datasets, yLabel, y1Max){
+  if(chart) chart.destroy();
+  const grid='#eef0f3';
+  chart = new Chart(document.getElementById('chart'), {
+    type:'bar',
+    data:{ labels, datasets },
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      interaction:{ mode:'index', intersect:false },
+      plugins:{
+        legend:{ position:'top', align:'end', labels:{ boxWidth:12, font:{size:11}, color:'#6b7280', usePointStyle:true } },
+        tooltip:{ callbacks:{ label:ctx=>{
+          if(ctx.dataset.yAxisID==='y1') return ` 達成率: ${ctx.parsed.y}%`;
+          return ` ${ctx.dataset.label}: ${ctx.parsed.y}h`;
+        }}}
+      },
+      scales:{
+        x:{ stacked:true, grid:{display:false}, ticks:{ color:'#6b7280', font:{size:11} } },
+        y:{ stacked:true, position:'left', grid:{color:grid}, title:{display:true,text:yLabel,color:'#9aa0ab',font:{size:10}},
+            ticks:{ color:'#9aa0ab', font:{size:10} } },
+        y1:{ position:'right', min:0, max:y1Max||140, grid:{drawOnChartArea:false},
+             title:{display:true,text:'達成率',color:'#9aa0ab',font:{size:10}},
+             ticks:{ color:'#9aa0ab', font:{size:10}, callback:v=>v+'%' } },
+      }
+    }
+  });
+}
+
+init();
+</script>
+</body>
+</html>
