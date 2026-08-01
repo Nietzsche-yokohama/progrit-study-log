@@ -1,5 +1,6 @@
 const TOKEN = process.env.SLACK_BOT_TOKEN;
 const CHANNEL = 'C08QDEH5H8V';
+const WORKER = 'https://progrit-study-log-worker.ybrnc777.workers.dev/api/progrit';
 
 async function fetchAllSlack(token) {
   let messages = [];
@@ -38,9 +39,6 @@ function sumMin(text, subject) {
   console.log('total messages fetched:', messages.length);
 
   const headerRe = /プログリットで学習\s*(\d+)\s*日目/g;
-  const known = ['シャドーイング', '速読', '口頭英作文', '単語', '多聴', 'スピーチ'];
-  const knownRe = new RegExp(known.join('|'));
-  const unknownLabels = new Map();
   const dayBlocks = new Map();
 
   const ordered = [...messages].sort((a, b) => parseFloat(a.ts || '0') - parseFloat(b.ts || '0'));
@@ -53,50 +51,63 @@ function sumMin(text, subject) {
       const day = parseInt(heads[i][1], 10);
       const start = (heads[i].index ?? 0) + heads[i][0].length;
       const end = i + 1 < heads.length ? (heads[i + 1].index ?? text.length) : text.length;
-      const block = text.slice(start, end);
-      dayBlocks.set(day, block);
-
-      const labelRe = /([^\s0-9、。\n:：]{1,14})\s*[:：]?\s*(\d+)\s*分/g;
-      let m;
-      while ((m = labelRe.exec(block)) !== null) {
-        const label = m[1].trim();
-        if (label && !knownRe.test(label)) {
-          unknownLabels.set(label, (unknownLabels.get(label) || 0) + 1);
-        }
-      }
+      dayBlocks.set(day, text.slice(start, end));
     }
   }
 
-  const days = [...dayBlocks.keys()].sort((a, b) => a - b);
-  console.log('days with headers found:', days.length);
-  console.log('day range:', days[0], '-', days[days.length - 1]);
-  console.log('missing day numbers in range:', Array.from(
-    { length: days[days.length - 1] - days[0] + 1 },
-    (_, i) => days[0] + i,
-  ).filter((d) => !dayBlocks.has(d)));
-
-  console.log('\n=== unknown labels (not matching known 6 subjects) ===');
-  if (unknownLabels.size === 0) console.log('(none found)');
-  for (const [label, count] of unknownLabels) console.log(' -', JSON.stringify(label), 'x', count);
-
-  console.log('\n=== zero-total days (all 6 known subjects = 0) ===');
-  const zeroDays = [];
-  for (const [d, block] of dayBlocks) {
-    const s = sumMin(block, 'シャドーイング');
-    const sp = sumMin(block, '速読');
-    const o = sumMin(block, '口頭英作文');
-    const v = sumMin(block, '単語');
-    const li = sumMin(block, '多聴');
-    const sc = sumMin(block, 'スピーチ');
-    if (s + sp + o + v + li + sc === 0) zeroDays.push(d);
-  }
-  console.log(zeroDays.length ? zeroDays.sort((a, b) => a - b) : '(none)');
-
-  console.log('\n=== raw blocks for day 55-75 (first 400 chars each) ===');
-  for (let d = 55; d <= 75; d++) {
-    if (dayBlocks.has(d)) {
-      console.log(`--- Day ${d} ---`);
-      console.log(dayBlocks.get(d).trim().slice(0, 400));
+  console.log('\n=== full-text search for "リピーティング" across all days ===');
+  for (const [d, block] of [...dayBlocks].sort((a, b) => a[0] - b[0])) {
+    const re = /リピーティング[^0-9]*?(\d+)\s*分/g;
+    let m;
+    while ((m = re.exec(block)) !== null) {
+      console.log(`Day ${d}: リピーティング ${m[1]}分`);
     }
+  }
+
+  console.log('\n=== raw blocks for zero-total days (61, 89, 92) ===');
+  for (const d of [61, 89, 92]) {
+    console.log(`--- Day ${d} ---`);
+    console.log(JSON.stringify(dayBlocks.get(d) ?? '(no block found in current Slack retention)'));
+  }
+
+  console.log('\n=== cross-check against currently deployed worker data ===');
+  try {
+    const res = await fetch(WORKER);
+    const data = await res.json();
+    const byDay = new Map(data.days.map((r) => [r.d, r]));
+    for (const d of [61, 89, 92]) {
+      const r = byDay.get(d);
+      console.log(`Day ${d} in deployed KV:`, r ? JSON.stringify(r) : '(missing)');
+    }
+
+    console.log('\n=== recompute insight-relevant stats over full deployed dataset ===');
+    const RAW = data.days;
+    const N = RAW.length;
+    const totals = RAW.map((r) => r.s + r.sp + r.o + r.v + r.li + (r.sc || 0));
+    const zeroDays = RAW.filter((r, i) => totals[i] === 0).map((r) => r.d);
+    console.log('N (total days in dataset):', N);
+    console.log('zero-total days in full dataset:', zeroDays.length ? zeroDays : '(none)');
+    console.log('"N日連続、1日も休んでいません" claim holds:', zeroDays.length === 0);
+
+    const sTotal = RAW.reduce((a, r) => a + r.s, 0);
+    const spTotal = RAW.reduce((a, r) => a + r.sp, 0);
+    const oTotal = RAW.reduce((a, r) => a + r.o, 0);
+    const vTotal = RAW.reduce((a, r) => a + r.v, 0);
+    const liTotal = RAW.reduce((a, r) => a + r.li, 0);
+    const scTotal = RAW.reduce((a, r) => a + (r.sc || 0), 0);
+    console.log('subject totals (min): shadow', sTotal, 'speed', spTotal, 'oral', oTotal, 'vocab', vTotal, 'listen', liTotal, 'speech', scTotal);
+    const topIsShadow = sTotal >= Math.max(spTotal, oTotal, vTotal, liTotal, scTotal);
+    console.log('topIsShadow (shadowing is #1 subject):', topIsShadow, '-> actual #1 is', ['shadow','speed','oral','vocab','listen','speech'][[sTotal,spTotal,oTotal,vTotal,liTotal,scTotal].indexOf(Math.max(sTotal,spTotal,oTotal,vTotal,liTotal,scTotal))]);
+
+    const recentN = Math.min(7, N);
+    const recentAvg = Math.round(RAW.slice(-recentN).reduce((a, r) => a + r.s + r.sp + r.o + r.v + r.li + (r.sc || 0), 0) / recentN);
+    const overallAvg = Math.round(totals.reduce((a, b) => a + b, 0) / N);
+    console.log('recentAvg (last 7d):', recentAvg, 'overallAvg:', overallAvg, '-> pace insight:', recentAvg >= overallAvg ? 'good/勢いあり' : 'warn/ペースダウン');
+
+    const vocabs = RAW.map((r) => r.v);
+    const vocabMax = Math.max(...vocabs), vocabMin = Math.min(...vocabs);
+    console.log('vocab max/min:', vocabMax, vocabMin, 'spread>60:', vocabMax - vocabMin > 60);
+  } catch (e) {
+    console.error('worker fetch failed:', e.message);
   }
 })();
