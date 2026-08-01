@@ -11,7 +11,7 @@
   :root{
     --bg:#0d1117;--card:#161b22;--card2:#1c2128;--border:#30363d;
     --text:#e6edf3;--muted:#8b949e;--accent:#58a6ff;
-    --shadow:#4FC3F7;--speed:#81C784;--oral:#FFB74D;--vocab:#CE93D8;--listen:#F06292;--speech:#FFD54F;
+    --shadow:#4FC3F7;--speed:#81C784;--oral:#FFB74D;--vocab:#CE93D8;--listen:#F06292;--speech:#FFD54F;--repeat:#8BC34A;
   }
   body{background:var(--bg);color:var(--text);font-family:'Noto Sans JP',sans-serif;min-height:100vh;padding:20px}
   h1{text-align:center;font-size:1.6rem;font-weight:700;margin-bottom:4px;background:linear-gradient(90deg,#58a6ff,#a5d6ff);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
@@ -117,6 +117,7 @@
         <span class="leg-item"><span class="leg-dot" style="background:var(--vocab)"></span>単語</span>
         <span class="leg-item"><span class="leg-dot" style="background:var(--listen)"></span>多聴</span>
         <span class="leg-item"><span class="leg-dot" style="background:var(--speech)"></span>1分間スピーチ</span>
+        <span class="leg-item"><span class="leg-dot" style="background:var(--repeat)"></span>リピーティング</span>
       </div>
       <div class="chart-wrap" style="height:260px"><canvas id="stackedChart"></canvas></div>
     </div>
@@ -142,8 +143,8 @@
 
 <script>
 const WORKER = 'https://progrit-study-log-worker.ybrnc777.workers.dev/api/progrit';
-const PAGE_VERSION = 'v2026.07.03（1分間スピーチ対応）';
-const C = { shadow:'#4FC3F7', speed:'#81C784', oral:'#FFB74D', vocab:'#CE93D8', listen:'#F06292', speech:'#FFD54F' };
+const PAGE_VERSION = 'v2026.08.01（リピーティング対応）';
+const C = { shadow:'#4FC3F7', speed:'#81C784', oral:'#FFB74D', vocab:'#CE93D8', listen:'#F06292', speech:'#FFD54F', repeat:'#8BC34A' };
 const DOW_NAMES = ['日','月','火','水','木','金','土'];
 
 async function init() {
@@ -164,7 +165,7 @@ function fmt(n) { return n.toLocaleString(); }
 function render(RAW, fetchedAt) {
   // ── 基本計算 ────────────────────────────────
   const N = RAW.length;
-  const totals = RAW.map(r => r.s + r.sp + r.o + r.v + r.li + (r.sc || 0));
+  const totals = RAW.map(r => r.s + r.sp + r.o + r.v + r.li + (r.sc || 0) + (r.rp || 0));
   const totalMin = totals.reduce((a,b) => a+b, 0);
   const totalHrs = (totalMin / 60).toFixed(1);
   const avgMin = (totalMin / N).toFixed(1);
@@ -178,6 +179,7 @@ function render(RAW, fetchedAt) {
   const vTotal  = RAW.reduce((a,r) => a+r.v,  0);
   const liTotal = RAW.reduce((a,r) => a+r.li, 0);
   const scTotal = RAW.reduce((a,r) => a+(r.sc||0), 0);
+  const rpTotal = RAW.reduce((a,r) => a+(r.rp||0), 0);
 
   const labels = RAW.map(r => `Day${r.d}\n${r.date}(${r.dow})`);
   const shortLabels = RAW.map(r => r.date);
@@ -190,14 +192,14 @@ function render(RAW, fetchedAt) {
     `<span class="badge">${N}日間</span><span class="badge">よこはま（横浜一輝）</span>`;
 
   // ── KPI ─────────────────────────────────────
-  const subjectCount = [sTotal,spTotal,oTotal,vTotal,liTotal,scTotal].filter(v=>v>0).length;
+  const subjectCount = [sTotal,spTotal,oTotal,vTotal,liTotal,scTotal,rpTotal].filter(v=>v>0).length;
   document.getElementById('kpiGrid').innerHTML = `
     <div class="kpi hl"><div class="val" style="color:#58a6ff">${totalHrs}</div><div class="lbl">総学習時間（時間）</div><div class="sub">${fmt(totalMin)} 分</div></div>
     <div class="kpi"><div class="val">${avgMin}</div><div class="lbl">日平均（分）</div><div class="sub">${Math.floor(avgMin/60)}時間 ${Math.round(avgMin%60)}分</div></div>
     <div class="kpi hl"><div class="val" style="color:#81C784">${N}</div><div class="lbl">連続学習日数</div><div class="sub">🔥 皆勤継続中</div></div>
     <div class="kpi"><div class="val">${maxMin}</div><div class="lbl">最高記録（分）</div><div class="sub">${maxDay.date}（${maxDay.dow}）Day${maxDay.d}</div></div>
     <div class="kpi"><div class="val" style="color:#F06292">${minMin}</div><div class="lbl">最低記録（分）</div><div class="sub">${minDay.date}（${minDay.dow}）Day${minDay.d}</div></div>
-    <div class="kpi"><div class="val">${subjectCount}</div><div class="lbl">学習科目数</div><div class="sub">${scTotal>0?'最新: 1分間スピーチ 追加':(liTotal>0?'最新: 多聴 追加':'')}</div></div>
+    <div class="kpi"><div class="val">${subjectCount}</div><div class="lbl">学習科目数</div><div class="sub">${rpTotal>0?'最新: リピーティング 追加':(scTotal>0?'最新: 1分間スピーチ 追加':(liTotal>0?'最新: 多聴 追加':''))}</div></div>
   `;
 
   // ── 科目リスト ────────────────────────────────
@@ -208,6 +210,7 @@ function render(RAW, fetchedAt) {
     {name:'口頭英作文',    val:oTotal,  color:C.oral},
     {name:'多聴',          val:liTotal, color:C.listen},
     {name:'1分間スピーチ', val:scTotal, color:C.speech},
+    {name:'リピーティング', val:rpTotal, color:C.repeat},
   ].filter(s => s.val > 0).sort((a,b) => b.val - a.val);
   const maxSubj = subjData[0]?.val || 1;
   document.getElementById('subjList').innerHTML = subjData.map(s =>
@@ -221,7 +224,7 @@ function render(RAW, fetchedAt) {
   // ── 曜日別 ───────────────────────────────────
   const dowGroups = Array.from({length:7}, () => ({sum:0, n:0}));
   RAW.forEach(r => {
-    const tot = r.s + r.sp + r.o + r.v + r.li + (r.sc || 0);
+    const tot = r.s + r.sp + r.o + r.v + r.li + (r.sc || 0) + (r.rp || 0);
     dowGroups[r.dowIdx].sum += tot;
     dowGroups[r.dowIdx].n++;
   });
@@ -245,12 +248,20 @@ function render(RAW, fetchedAt) {
   const insights = [];
   const pct = v => totalMin ? Math.round(v / totalMin * 100) : 0;
   const recentN = Math.min(7, N);
-  const recentAvg = Math.round(RAW.slice(-recentN).reduce((a,r)=>a+r.s+r.sp+r.o+r.v+r.li+(r.sc||0),0) / recentN);
+  const recentAvg = Math.round(RAW.slice(-recentN).reduce((a,r)=>a+r.s+r.sp+r.o+r.v+r.li+(r.sc||0)+(r.rp||0),0) / recentN);
   const overallAvg = Math.round(totalMin / N);
 
-  // 1. 継続の称賛（モチベの土台）
-  insights.push({type:'good', icon:'🔥', html:
-    `<strong>${N}日連続、1日も休んでいません。</strong>　${firstDate}〜${lastDate}で総学習 <strong>${totalHrs}時間</strong>。これは才能ではなく“続けられる人”である証拠。積み上げた時間は必ずスコアに返ってきます。`});
+  // 1. 継続の称賛（モチベの土台）※ 実際に0分の日がないかを必ず確認してから断定する
+  const zeroDays = RAW.filter((r, i) => totals[i] === 0);
+  const activeDays = N - zeroDays.length;
+  if (zeroDays.length === 0) {
+    insights.push({type:'good', icon:'🔥', html:
+      `<strong>${N}日連続、1日も休んでいません。</strong>　${firstDate}〜${lastDate}で総学習 <strong>${totalHrs}時間</strong>。これは才能ではなく“続けられる人”である証拠。積み上げた時間は必ずスコアに返ってきます。`});
+  } else {
+    const restList = zeroDays.map(r => `Day${r.d}(${r.date})`).join('・');
+    insights.push({type:'', icon:'🔥', html:
+      `<strong>${N}日間で記録できたのは${activeDays}日。</strong>　${firstDate}〜${lastDate}で総学習 <strong>${totalHrs}時間</strong>。記録が無い日は ${restList} の${zeroDays.length}日。完璧である必要はないので、次の1日を空けないことだけ意識しましょう。`});
+  }
 
   // 2. 直近の勢い（維持 or 立て直し）
   if (recentAvg >= overallAvg) {
@@ -263,7 +274,7 @@ function render(RAW, fetchedAt) {
 
   // 3. 最優先＝シャドーイング
   const sShare = pct(sTotal);
-  const topIsShadow = sTotal >= Math.max(spTotal, oTotal, vTotal, liTotal, scTotal);
+  const topIsShadow = sTotal >= Math.max(spTotal, oTotal, vTotal, liTotal, scTotal, rpTotal);
   if (topIsShadow) {
     insights.push({type:'good', icon:'🎙️', html:
       `<strong>最優先のシャドーイングが土台になっています。</strong>　全体の <strong>${sShare}%</strong>（${fmt(sTotal)}分）で全科目中もっとも多く、優先順位どおりに時間を使えています。発音と音声知覚の伸びはここで決まる——いい配分です。`});
@@ -340,10 +351,10 @@ function render(RAW, fetchedAt) {
   });
 
   // 2. Donut
-  const subjTotals = [sTotal, spTotal, oTotal, vTotal, liTotal, scTotal];
+  const subjTotals = [sTotal, spTotal, oTotal, vTotal, liTotal, scTotal, rpTotal];
   const donutData = subjTotals.filter(v => v > 0);
-  const donutLabels = ['シャドーイング','速読','口頭英作文','単語','多聴','1分間スピーチ'].filter((_,i) => subjTotals[i] > 0);
-  const donutColors = [C.shadow, C.speed, C.oral, C.vocab, C.listen, C.speech].filter((_,i) => subjTotals[i] > 0);
+  const donutLabels = ['シャドーイング','速読','口頭英作文','単語','多聴','1分間スピーチ','リピーティング'].filter((_,i) => subjTotals[i] > 0);
+  const donutColors = [C.shadow, C.speed, C.oral, C.vocab, C.listen, C.speech, C.repeat].filter((_,i) => subjTotals[i] > 0);
   new Chart(document.getElementById('donutChart'), {
     type: 'doughnut',
     data: { labels: donutLabels, datasets: [{ data: donutData, backgroundColor: donutColors, borderWidth: 0 }] },
@@ -365,6 +376,7 @@ function render(RAW, fetchedAt) {
         { label: '単語',          data: RAW.map(r=>r.v),  backgroundColor: C.vocab,   stack: 'a' },
         { label: '多聴',          data: RAW.map(r=>r.li), backgroundColor: C.listen,  stack: 'a' },
         { label: '1分間スピーチ', data: RAW.map(r=>r.sc||0), backgroundColor: C.speech,  stack: 'a' },
+        { label: 'リピーティング', data: RAW.map(r=>r.rp||0), backgroundColor: C.repeat,  stack: 'a' },
       ]
     },
     options: {
@@ -418,6 +430,7 @@ function render(RAW, fetchedAt) {
         { label:'口頭英作文',    data:movAvg(RAW.map(r=>r.o)),  borderColor:C.oral,   backgroundColor:'transparent', tension:0.4, pointRadius:0, borderWidth:2 },
         { label:'単語',          data:movAvg(RAW.map(r=>r.v)),  borderColor:C.vocab,  backgroundColor:'transparent', tension:0.4, pointRadius:0, borderWidth:2 },
         { label:'1分間スピーチ', data:movAvg(RAW.map(r=>r.sc||0)), borderColor:C.speech, backgroundColor:'transparent', tension:0.4, pointRadius:0, borderWidth:2 },
+        { label:'リピーティング', data:movAvg(RAW.map(r=>r.rp||0)), borderColor:C.repeat, backgroundColor:'transparent', tension:0.4, pointRadius:0, borderWidth:2 },
       ]
     },
     options: {

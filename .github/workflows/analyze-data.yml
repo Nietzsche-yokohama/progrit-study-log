@@ -1,4 +1,4 @@
-name: Analyze Slack data (one-off)
+name: Migrate rp field into KV (one-off)
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  analyze:
+  migrate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -15,7 +15,11 @@ jobs:
           node-version: '22'
           cache: 'npm'
       - run: npm ci
-      - name: Fetch raw Slack history and analyze
-        run: node analyze.mjs
+      - name: Re-fetch from Slack with rp support and seed PROGRIT_KV
+        run: |
+          node migrate.mjs
+          npx wrangler kv key put progrit_master_v7 --path=master.json --namespace-id=b9911ef74511411ba5c72b1071fcee9e --remote
         env:
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

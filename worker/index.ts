@@ -31,6 +31,7 @@ interface ProgritDay {
   v: number;
   li: number;
   sc: number; // 1分間スピーチ（途中から追加された科目。過去データには存在しない）
+  rp: number; // リピーティング（さらに後から追加された科目。過去データには存在しない）
 }
 
 // 学習1日目の実日付。d番号から実日付を導出する（Slackの投稿日時は
@@ -38,7 +39,7 @@ interface ProgritDay {
 const DOW_JP = ['日', '月', '火', '水', '木', '金', '土'];
 const BASE_UTC = Date.UTC(2026, 3, 24); // 2026-04-24 = 学習1日目
 
-function makeDay(d: number, s: number, sp: number, o: number, v: number, li: number, sc = 0): ProgritDay {
+function makeDay(d: number, s: number, sp: number, o: number, v: number, li: number, sc = 0, rp = 0): ProgritDay {
   const dt = new Date(BASE_UTC + (d - 1) * 86400000);
   const dowIdx = dt.getUTCDay();
   return {
@@ -46,7 +47,7 @@ function makeDay(d: number, s: number, sp: number, o: number, v: number, li: num
     date: `${dt.getUTCMonth() + 1}/${dt.getUTCDate()}`,
     dow: DOW_JP[dowIdx],
     dowIdx,
-    s, sp, o, v, li, sc,
+    s, sp, o, v, li, sc, rp,
   };
 }
 
@@ -88,9 +89,10 @@ function parseProgritMessages(messages: SlackMessage[]): ProgritDay[] {
       // 「1分間スピーチ」等の表記ゆれを拾うため「スピーチ」で照合する。
       // sumMin はキーワードの後ろの数字を読むので、前置きの「1分間」は誤検出しない。
       const sc = sumMin(block, 'スピーチ');
+      const rp = sumMin(block, 'リピーティング');
 
       // 同じ日番号の再投稿は最新を優先（上書き）
-      dayMap.set(day, makeDay(day, s, sp, o, v, li, sc));
+      dayMap.set(day, makeDay(day, s, sp, o, v, li, sc, rp));
     }
   }
 
