@@ -1,0 +1,32 @@
+name: Import historical data (one-off)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci
+      - name: Fetch full history from lexicon-worker and seed PROGRIT_KV
+        run: |
+          curl -sS https://lexicon-worker.ybrnc777.workers.dev/api/progrit -o old.json
+          node -e "
+            const fs = require('fs');
+            const old = JSON.parse(fs.readFileSync('old.json', 'utf8'));
+            if (!old.days || !old.days.length) { throw new Error('no days in source data'); }
+            const master = { days: old.days, lastMsgTs: '0', savedAt: old.fetchedAt || Date.now() };
+            fs.writeFileSync('master.json', JSON.stringify(master));
+            console.log('imported days:', old.days.length, 'max day:', Math.max(...old.days.map(d => d.d)));
+          "
+          npx wrangler kv key put progrit_master_v7 --path=master.json --namespace-id=b9911ef74511411ba5c72b1071fcee9e --remote
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
