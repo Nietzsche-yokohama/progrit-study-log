@@ -2,6 +2,10 @@ name: Bootstrap KV (one-off)
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/bootstrap-kv.yml'
 
 jobs:
   bootstrap:
