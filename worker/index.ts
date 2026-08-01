@@ -20,6 +20,11 @@ interface SlackMessage {
   bot_id?: string;
 }
 
+interface UnknownEntry {
+  label: string; // Slack上の行そのままの科目表記（例:「リピーティング」）
+  min: number;
+}
+
 interface ProgritDay {
   d: number;
   date: string;
@@ -32,14 +37,23 @@ interface ProgritDay {
   li: number;
   sc: number; // 1分間スピーチ（途中から追加された科目。過去データには存在しない）
   rp: number; // リピーティング（さらに後から追加された科目。過去データには存在しない）
+  unknown: UnknownEntry[]; // 既知科目に当てはまらなかった行（新科目追加の見落とし検知用）
 }
+
+// 既知の科目一覧（sumMin の抽出キーワードと1対1対応）。
+// Slackに新しい科目が追加されたら、必ずここにも追記すること。
+// 追記を忘れても /api/progrit の unknownSubjects に自動で出てくるので気付ける。
+const KNOWN_SUBJECTS = ['シャドーイング', '速読', '口頭英作文', '単語', '多聴', 'スピーチ', 'リピーティング'];
 
 // 学習1日目の実日付。d番号から実日付を導出する（Slackの投稿日時は
 // 後追い・まとめ投稿でずれるため、日付の基準には使わない）。
 const DOW_JP = ['日', '月', '火', '水', '木', '金', '土'];
 const BASE_UTC = Date.UTC(2026, 3, 24); // 2026-04-24 = 学習1日目
 
-function makeDay(d: number, s: number, sp: number, o: number, v: number, li: number, sc = 0, rp = 0): ProgritDay {
+function makeDay(
+  d: number, s: number, sp: number, o: number, v: number, li: number,
+  sc = 0, rp = 0, unknown: UnknownEntry[] = [],
+): ProgritDay {
   const dt = new Date(BASE_UTC + (d - 1) * 86400000);
   const dowIdx = dt.getUTCDay();
   return {
@@ -47,8 +61,24 @@ function makeDay(d: number, s: number, sp: number, o: number, v: number, li: num
     date: `${dt.getUTCMonth() + 1}/${dt.getUTCDate()}`,
     dow: DOW_JP[dowIdx],
     dowIdx,
-    s, sp, o, v, li, sc, rp,
+    s, sp, o, v, li, sc, rp, unknown,
   };
+}
+
+// ブロック内の「科目名 N分」形式の行のうち、既知科目に一致しないものを拾う。
+// 「1分間スピーチ」のように科目名自体に数字を含むケースは行末の数値だけを
+// 実測値として扱うため誤検知しない。新科目が追加されたときの取りこぼし検知に使う。
+function findUnknownEntries(block: string, knownSubjects: string[]): UnknownEntry[] {
+  const knownRe = new RegExp(knownSubjects.join('|'));
+  const result: UnknownEntry[] = [];
+  for (const rawLine of block.split('\n')) {
+    const m = rawLine.match(/^[\s　]*(.+?)[\s　]*(\d+)\s*分\s*$/);
+    if (!m) continue;
+    const label = m[1].trim();
+    if (!label || knownRe.test(label)) continue;
+    result.push({ label, min: parseInt(m[2], 10) });
+  }
+  return result;
 }
 
 function parseProgritMessages(messages: SlackMessage[]): ProgritDay[] {
@@ -90,13 +120,41 @@ function parseProgritMessages(messages: SlackMessage[]): ProgritDay[] {
       // sumMin はキーワードの後ろの数字を読むので、前置きの「1分間」は誤検出しない。
       const sc = sumMin(block, 'スピーチ');
       const rp = sumMin(block, 'リピーティング');
+      const unknown = findUnknownEntries(block, KNOWN_SUBJECTS);
 
       // 同じ日番号の再投稿は最新を優先（上書き）
-      dayMap.set(day, makeDay(day, s, sp, o, v, li, sc, rp));
+      dayMap.set(day, makeDay(day, s, sp, o, v, li, sc, rp, unknown));
     }
   }
 
   return Array.from(dayMap.values()).sort((a, b) => a.d - b.d);
+}
+
+// 全期間の合計・未知科目サマリをサーバー側で一度だけ計算する。
+// フロント側（progrit.html / progrit-weekly.html）は必ずこの値を表示に使い、
+// 各ページで独自に合計を再計算しない。二重計算をやめることで「ページ間で
+// 合計が食い違う」再発を構造的に防ぐ。
+function summarize(days: ProgritDay[]) {
+  const dayTotal = (d: ProgritDay) =>
+    d.s + d.sp + d.o + d.v + d.li + (d.sc || 0) + (d.rp || 0) +
+    (d.unknown || []).reduce((a, u) => a + u.min, 0);
+
+  const totals = days.map(dayTotal);
+  const totalMinutes = totals.reduce((a, b) => a + b, 0);
+  const activeDays = totals.filter((t) => t > 0).length;
+
+  const unknownAgg = new Map<string, { totalMin: number; days: number[] }>();
+  for (const d of days) {
+    for (const u of d.unknown || []) {
+      const cur = unknownAgg.get(u.label) ?? { totalMin: 0, days: [] };
+      cur.totalMin += u.min;
+      cur.days.push(d.d);
+      unknownAgg.set(u.label, cur);
+    }
+  }
+  const unknownSubjects = Array.from(unknownAgg, ([label, v]) => ({ label, ...v }));
+
+  return { totalDays: days.length, activeDays, totalMinutes, unknownSubjects };
 }
 
 export default {
@@ -137,7 +195,7 @@ export default {
 
     // 30分以内に更新済みならキャッシュ返却
     if (Date.now() - master.savedAt < REFRESH_MS && master.days.length > 0) {
-      return new Response(JSON.stringify({ fetchedAt: master.savedAt, days: master.days }), {
+      return new Response(JSON.stringify({ fetchedAt: master.savedAt, days: master.days, summary: summarize(master.days) }), {
         headers: { ...CORS, 'Content-Type': 'application/json', 'X-Cache': 'HIT' },
       });
     }
@@ -145,7 +203,7 @@ export default {
     if (!env.SLACK_BOT_TOKEN) {
       // トークン未設定でも保存済みデータがあれば返す
       if (master.days.length > 0) {
-        return new Response(JSON.stringify({ fetchedAt: master.savedAt, days: master.days }), {
+        return new Response(JSON.stringify({ fetchedAt: master.savedAt, days: master.days, summary: summarize(master.days) }), {
           headers: { ...CORS, 'Content-Type': 'application/json', 'X-Cache': 'STORED' },
         });
       }
@@ -199,14 +257,14 @@ export default {
       // TTLなしで永続保存（KV上限まで消えない）
       await env.PROGRIT_KV.put(MASTER_KEY, JSON.stringify(master));
 
-      return new Response(JSON.stringify({ fetchedAt: master.savedAt, days: master.days }), {
+      return new Response(JSON.stringify({ fetchedAt: master.savedAt, days: master.days, summary: summarize(master.days) }), {
         headers: { ...CORS, 'Content-Type': 'application/json', 'X-Cache': 'MISS' },
       });
     } catch (e) {
       console.error('progrit fetch error:', e);
       // エラーでも保存済みデータがあれば返す（サービス継続）
       if (master.days.length > 0) {
-        return new Response(JSON.stringify({ fetchedAt: master.savedAt, days: master.days }), {
+        return new Response(JSON.stringify({ fetchedAt: master.savedAt, days: master.days, summary: summarize(master.days) }), {
           headers: { ...CORS, 'Content-Type': 'application/json', 'X-Cache': 'STORED' },
         });
       }

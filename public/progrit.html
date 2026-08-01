@@ -77,6 +77,10 @@
   .insight .txt{font-size:.82rem;line-height:1.6}
   .insight .txt strong{color:var(--text)}
 
+  /* 未知科目・不整合の警告バナー */
+  .warn-banner{display:none;background:#3d2b0a;border:1px solid #FFB74D;border-radius:10px;padding:12px 16px;margin-bottom:16px;font-size:.82rem;line-height:1.6;color:#ffe0b2}
+  .warn-banner strong{color:#FFB74D}
+
   footer{text-align:center;color:#484f58;font-size:.72rem;margin-top:28px;padding-top:16px;border-top:1px solid var(--border)}
 </style>
 </head>
@@ -90,6 +94,8 @@
 <div id="main">
   <h1>🎓 PROGRIT 学習ダッシュボード</h1>
   <div class="subtitle" id="subtitle"></div>
+
+  <div class="warn-banner" id="warnBanner"></div>
 
   <div class="kpi-grid" id="kpiGrid"></div>
 
@@ -143,7 +149,7 @@
 
 <script>
 const WORKER = 'https://progrit-study-log-worker.ybrnc777.workers.dev/api/progrit';
-const PAGE_VERSION = 'v2026.08.01（リピーティング対応）';
+const PAGE_VERSION = 'v2026.08.01b（未知科目検知・合計統一）';
 const C = { shadow:'#4FC3F7', speed:'#81C784', oral:'#FFB74D', vocab:'#CE93D8', listen:'#F06292', speech:'#FFD54F', repeat:'#8BC34A' };
 const DOW_NAMES = ['日','月','火','水','木','金','土'];
 
@@ -153,7 +159,7 @@ async function init() {
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
     if (!data.days || data.days.length === 0) throw new Error('データなし');
-    render(data.days, data.fetchedAt);
+    render(data.days, data.fetchedAt, data.summary);
   } catch(e) {
     document.getElementById('loading').innerHTML =
       '<div class="error-txt">⚠ データ取得エラー<br><small>' + e.message + '</small></div>';
@@ -162,13 +168,34 @@ async function init() {
 
 function fmt(n) { return n.toLocaleString(); }
 
-function render(RAW, fetchedAt) {
+function render(RAW, fetchedAt, summary) {
   // ── 基本計算 ────────────────────────────────
+  // 合計は必ずWorker側(summary.totalMinutes)を正とする。ページ内で独自に合計を
+  // 再計算して2画面の数字が食い違う、という事態を構造的に防ぐため。
   const N = RAW.length;
   const totals = RAW.map(r => r.s + r.sp + r.o + r.v + r.li + (r.sc || 0) + (r.rp || 0));
-  const totalMin = totals.reduce((a,b) => a+b, 0);
+  const localTotalMin = totals.reduce((a,b) => a+b, 0);
+  const totalMin = summary ? summary.totalMinutes : localTotalMin;
   const totalHrs = (totalMin / 60).toFixed(1);
   const avgMin = (totalMin / N).toFixed(1);
+
+  // ── 警告バナー：未知科目・サーバー側合計とのズレ検知 ──────
+  const warnLines = [];
+  if (summary && summary.unknownSubjects && summary.unknownSubjects.length > 0) {
+    summary.unknownSubjects.forEach(u => {
+      warnLines.push(`未対応の学習項目「${u.label}」を検出：合計${u.totalMin}分（${u.days.map(d=>'Day'+d).join(', ')}）。集計から漏れています。パーサーへの追加が必要です。`);
+    });
+  }
+  if (summary && Math.abs(summary.totalMinutes - localTotalMin) > 0) {
+    warnLines.push(`サーバー側の合計（${summary.totalMinutes}分）とこのページの再計算結果（${localTotalMin}分）が一致しません。表示ロジックにバグの可能性があります。`);
+  }
+  const warnBanner = document.getElementById('warnBanner');
+  if (warnLines.length > 0) {
+    warnBanner.style.display = 'block';
+    warnBanner.innerHTML = '<strong>⚠ 要確認</strong><br>' + warnLines.join('<br>');
+  } else {
+    warnBanner.style.display = 'none';
+  }
   const maxMin = Math.max(...totals);
   const minMin = Math.min(...totals);
   const maxDay = RAW[totals.indexOf(maxMin)];

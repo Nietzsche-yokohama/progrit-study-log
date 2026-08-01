@@ -52,6 +52,10 @@
   .load-txt{color:var(--muted);font-size:.85rem}
   .error-txt{color:#d9534f;font-size:.9rem;text-align:center}
   #main{display:none}
+
+  /* 未知科目・不整合の警告バナー */
+  .warn-banner{display:none;background:#fff3cd;border:1px solid #e5a93d;border-radius:10px;padding:12px 16px;margin-bottom:16px;font-size:.82rem;line-height:1.6;color:#6b4f0f}
+  .warn-banner strong{color:#a3720a}
 </style>
 </head>
 <body>
@@ -73,12 +77,14 @@
       <button class="tab" id="tabWeekly">週次進捗</button>
     </div>
 
+    <div class="warn-banner" id="warnBanner"></div>
+
     <div class="sec-h">学習状況<span class="range" id="rangeLbl"></span></div>
     <div class="card">
       <div class="kpis" id="kpis"></div>
       <div class="chart-wrap"><canvas id="chart"></canvas></div>
     </div>
-    <div style="text-align:center;color:var(--muted);font-size:.7rem;margin-top:14px">v2026.08.01（リピーティング対応）</div>
+    <div style="text-align:center;color:var(--muted);font-size:.7rem;margin-top:14px">v2026.08.01b（未知科目検知・合計統一）</div>
   </div>
 </div>
 
@@ -100,12 +106,35 @@ const CAT = [
 function cssvar(v){ return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
 
 let RAW = [];          // worker days
+let SUMMARY = null;    // Worker側で計算した全期間サマリ（合計はここを正とする）
 let byDay = new Map(); // d -> record
 let dataWeeks = 1;     // 実績のある週数（日次タブのナビ上限・初期表示）
 let numWeeks = PROGRAM_WEEKS; // 週次タブで表示する週数（プログラム全期間）
 let selWeek = 1;       // 選択中の週（日次タブ用）
 let mode = 'daily';
 let chart = null;
+
+function renderWarnBanner(){
+  const banner = document.getElementById('warnBanner');
+  const lines = [];
+  if (SUMMARY && SUMMARY.unknownSubjects && SUMMARY.unknownSubjects.length > 0) {
+    SUMMARY.unknownSubjects.forEach(u => {
+      lines.push(`未対応の学習項目「${u.label}」を検出：合計${u.totalMin}分（${u.days.map(d=>'Day'+d).join(', ')}）。集計から漏れています。パーサーへの追加が必要です。`);
+    });
+  }
+  if (SUMMARY) {
+    const localTotal = RAW.reduce((a,r) => a + tot(r), 0);
+    if (Math.abs(SUMMARY.totalMinutes - localTotal) > 0) {
+      lines.push(`サーバー側の合計（${SUMMARY.totalMinutes}分）とこのページの再計算結果（${localTotal}分）が一致しません。表示ロジックにバグの可能性があります。`);
+    }
+  }
+  if (lines.length > 0) {
+    banner.style.display = 'block';
+    banner.innerHTML = '<strong>⚠ 要確認</strong><br>' + lines.join('<br>');
+  } else {
+    banner.style.display = 'none';
+  }
+}
 
 async function init(){
   try{
@@ -114,6 +143,7 @@ async function init(){
     const data = await res.json();
     if(!data.days || !data.days.length) throw new Error('データなし');
     RAW = data.days;
+    SUMMARY = data.summary || null;
     byDay = new Map(RAW.map(r => [r.d, r]));
     const maxD = Math.max(...RAW.map(r => r.d));
     dataWeeks = Math.max(1, Math.ceil(maxD / 7));
@@ -124,6 +154,7 @@ async function init(){
     selWeek = dataWeeks;        // 日次の初期表示は最新のデータ週
     document.getElementById('loading').style.display='none';
     document.getElementById('main').style.display='block';
+    renderWarnBanner();
     bindUI();
     render();
   }catch(e){
@@ -229,9 +260,13 @@ function renderWeekly(){
   CAT.forEach(c=>{ cats[c.key]=cats[c.key].map(v=>+v.toFixed(2)); });
 
   const maxD = Math.max(...RAW.map(r=>r.d));
-  const totalH=grand/60;
+  // 累計はWorker側(SUMMARY.totalMinutes)を正とする。週次ループの積み上げ(grand)は
+  // チャート描画用の内訳計算であり、表示する合計そのものには使わない
+  // （numWeeksの範囲取り違え等があってもKPI表示の数字自体は必ず一致させるため）。
+  const grandMin = SUMMARY ? SUMMARY.totalMinutes : grand;
+  const totalH=grandMin/60;
   const avgH=totalH/maxD;
-  const achv=Math.round(grand/(GOAL_MIN*maxD)*100);
+  const achv=Math.round(grandMin/(GOAL_MIN*maxD)*100);
   const first=dateOf(1), last=dateOf(maxD);
   const fmt=dt=>`${dt.getUTCFullYear()}/${String(dt.getUTCMonth()+1).padStart(2,'0')}/${String(dt.getUTCDate()).padStart(2,'0')} (${DOW[dt.getUTCDay()]})`;
   document.getElementById('rangeLbl').textContent = `${fmt(first)} - ${fmt(last)}`;
