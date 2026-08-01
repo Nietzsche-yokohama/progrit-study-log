@@ -157,6 +157,26 @@ function summarize(days: ProgritDay[]) {
   return { totalDays: days.length, activeDays, totalMinutes, unknownSubjects };
 }
 
+// 第一クール／第二クールの境目。Slack本文でDay92が「ネクストコース1日目」と
+// 明言されているため、Day91までを第一クール、Day92以降を第二クールとして固定する。
+// 第三クールが始まったら、ここに境目を追加してcyclesの定義を増やすこと。
+const CYCLE_BOUNDARY_DAY = 91;
+
+// 各クールの集計もsummarize()を再利用して計算する。フロント側（クール別タブ）は
+// このcyclesをそのまま表示に使い、クールの境目や合計をページ側で持たない。
+function buildCycles(days: ProgritDay[]) {
+  const cycle1Days = days.filter((d) => d.d <= CYCLE_BOUNDARY_DAY);
+  const cycle2Days = days.filter((d) => d.d > CYCLE_BOUNDARY_DAY);
+  return [
+    { key: 'cycle1', label: '第一クール', fromDay: 1, toDay: CYCLE_BOUNDARY_DAY, ...summarize(cycle1Days) },
+    { key: 'cycle2', label: '第二クール', fromDay: CYCLE_BOUNDARY_DAY + 1, toDay: null as number | null, ...summarize(cycle2Days) },
+  ];
+}
+
+function buildPayload(fetchedAt: number, days: ProgritDay[]) {
+  return { fetchedAt, days, summary: summarize(days), cycles: buildCycles(days) };
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -195,7 +215,7 @@ export default {
 
     // 30分以内に更新済みならキャッシュ返却
     if (Date.now() - master.savedAt < REFRESH_MS && master.days.length > 0) {
-      return new Response(JSON.stringify({ fetchedAt: master.savedAt, days: master.days, summary: summarize(master.days) }), {
+      return new Response(JSON.stringify(buildPayload(master.savedAt, master.days)), {
         headers: { ...CORS, 'Content-Type': 'application/json', 'X-Cache': 'HIT' },
       });
     }
@@ -203,7 +223,7 @@ export default {
     if (!env.SLACK_BOT_TOKEN) {
       // トークン未設定でも保存済みデータがあれば返す
       if (master.days.length > 0) {
-        return new Response(JSON.stringify({ fetchedAt: master.savedAt, days: master.days, summary: summarize(master.days) }), {
+        return new Response(JSON.stringify(buildPayload(master.savedAt, master.days)), {
           headers: { ...CORS, 'Content-Type': 'application/json', 'X-Cache': 'STORED' },
         });
       }
@@ -257,14 +277,14 @@ export default {
       // TTLなしで永続保存（KV上限まで消えない）
       await env.PROGRIT_KV.put(MASTER_KEY, JSON.stringify(master));
 
-      return new Response(JSON.stringify({ fetchedAt: master.savedAt, days: master.days, summary: summarize(master.days) }), {
+      return new Response(JSON.stringify(buildPayload(master.savedAt, master.days)), {
         headers: { ...CORS, 'Content-Type': 'application/json', 'X-Cache': 'MISS' },
       });
     } catch (e) {
       console.error('progrit fetch error:', e);
       // エラーでも保存済みデータがあれば返す（サービス継続）
       if (master.days.length > 0) {
-        return new Response(JSON.stringify({ fetchedAt: master.savedAt, days: master.days, summary: summarize(master.days) }), {
+        return new Response(JSON.stringify(buildPayload(master.savedAt, master.days)), {
           headers: { ...CORS, 'Content-Type': 'application/json', 'X-Cache': 'STORED' },
         });
       }
