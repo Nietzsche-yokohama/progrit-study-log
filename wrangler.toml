@@ -5,5 +5,5 @@ workers_dev = true
 
 [[kv_namespaces]]
 binding = "PROGRIT_KV"
-id = "<PROGRIT_KV_NAMESPACE_ID>"
-preview_id = "<PROGRIT_KV_PREVIEW_ID>"
+id = "b9911ef74511411ba5c72b1071fcee9e"
+preview_id = "07e9e6b734ac47db86425a016ea13cfa"
