@@ -10,7 +10,7 @@
     "pages:deploy": "wrangler pages deploy public --project-name progrit-study-log"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20240909.0",
+    "@cloudflare/workers-types": "^5.20260730.1",
     "typescript": "^5.5.3",
     "wrangler": "^4.95.0"
   }
