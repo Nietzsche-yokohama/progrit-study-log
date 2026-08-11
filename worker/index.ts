@@ -4,14 +4,25 @@ import { PROGRIT_SEED } from './progrit-seed';
 export interface Env {
   PROGRIT_KV: KVNamespace;
   SLACK_BOT_TOKEN?: string;
+  APP_TOKEN?: string;
 }
 
-// 学習記録は非公開データを含まないため CORS は全開放でよい（読み取り専用・課金対象なし）。
-const CORS = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
-};
+// CORSはダッシュボードの配信元と開発用localhostのみに限定する（他Workerと方針統一）。
+const PROD_ORIGIN = 'https://progrit-study-log.pages.dev';
+
+function corsFor(request: Request): Record<string, string> {
+  const origin = request.headers.get('Origin') ?? '';
+  const allowed =
+    origin === PROD_ORIGIN ||
+    origin.endsWith('.progrit-study-log.pages.dev') || // Pages のプレビューデプロイ
+    /^http:\/\/localhost(:\d+)?$/.test(origin);
+  return {
+    'Access-Control-Allow-Origin': allowed ? origin : PROD_ORIGIN,
+    'Access-Control-Allow-Methods': 'GET, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    Vary: 'Origin',
+  };
+}
 
 interface SlackMessage {
   text: string;
@@ -180,6 +191,7 @@ function buildPayload(fetchedAt: number, days: ProgritDay[]) {
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
+    const CORS = corsFor(request);
 
     if (request.method === 'OPTIONS') {
       return new Response(null, { status: 204, headers: CORS });
@@ -187,6 +199,16 @@ export default {
 
     if (url.pathname !== '/api/progrit' || request.method !== 'GET') {
       return new Response('Not Found', { status: 404, headers: CORS });
+    }
+
+    // Bearer 認証（他Workerと方針統一）。シークレット APP_TOKEN が未設定の間は
+    // 従来どおり素通しにし、設定した時点で保護が有効になる（デプロイ直後に
+    // ダッシュボードを締め出さないための移行措置）。
+    const appToken = env.APP_TOKEN?.trim();
+    if (appToken && request.headers.get('Authorization') !== `Bearer ${appToken}`) {
+      return new Response(JSON.stringify({ error: 'unauthorized' }), {
+        status: 401, headers: { ...CORS, 'Content-Type': 'application/json' },
+      });
     }
 
     // master_v7: TTLなし永続保存。days全履歴 + lastMsgTs（最後に取得したSlackメッセージのts）

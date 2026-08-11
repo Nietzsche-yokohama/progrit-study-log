@@ -90,6 +90,21 @@
 
 <script>
 const WORKER = 'https://progrit-study-log-worker.ybrnc777.workers.dev/api/progrit';
+
+// Worker側がBearer認証必須になったため、初回にトークンを1度だけ入力して
+// localStorageに保存する。401が返ったら（未入力 or トークン変更後）再入力を促す。
+const TOKEN_KEY = 'progritAppToken';
+async function fetchWithToken(url) {
+  const saved = (localStorage.getItem(TOKEN_KEY) || '').trim();
+  let res = await fetch(url, saved ? { headers: { Authorization: 'Bearer ' + saved } } : undefined);
+  if (res.status === 401) {
+    const entered = (window.prompt('アクセストークンを入力してください') || '').trim();
+    if (!entered) return res;
+    localStorage.setItem(TOKEN_KEY, entered);
+    res = await fetch(url, { headers: { Authorization: 'Bearer ' + entered } });
+  }
+  return res;
+}
 const GOAL_H = 2.5;              // 1日の目標学習時間
 const GOAL_MIN = GOAL_H * 60;    // = 150分
 const PROGRAM_WEEKS = 12;        // プログラム全期間（週次タブはこの週数まで表示）
@@ -138,7 +153,7 @@ function renderWarnBanner(){
 
 async function init(){
   try{
-    const res = await fetch(WORKER);
+    const res = await fetchWithToken(WORKER);
     if(!res.ok) throw new Error('HTTP '+res.status);
     const data = await res.json();
     if(!data.days || !data.days.length) throw new Error('データなし');
