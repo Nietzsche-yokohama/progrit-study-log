@@ -50,3 +50,15 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+
+      - name: Set APP_TOKEN worker secret
+        run: |
+          if [ -n "$APP_TOKEN" ]; then
+            echo "$APP_TOKEN" | npx wrangler secret put APP_TOKEN
+          else
+            echo "APP_TOKEN not set in GitHub Secrets — skipping (API stays open until it is set)"
+          fi
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          APP_TOKEN: ${{ secrets.APP_TOKEN }}
