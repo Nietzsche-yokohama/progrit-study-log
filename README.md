@@ -33,6 +33,27 @@ Slack に投稿される学習ログを Cloudflare Worker が集計し、静的�
    （`PROGRAM_WEEKS` 上限など）にバグがあっても、表示される「累計」の数字自体は
    常にサーバー側の値と一致する。
 
+## アクセストークン（`APP_TOKEN`）
+
+Worker は `Authorization: Bearer <APP_TOKEN>` を要求する。フロント側の受け渡しは
+`public/auth.js` に集約してあり、次の3点で「スマホで開けない」状態を防いでいる。
+
+1. **リンクで渡せる** — `https://progrit-study-log.pages.dev/#token=<APP_TOKEN>` を開くと
+   トークンを localStorage に保存し、URLからは即座に消す。スマホで長い文字列を
+   手打ちする必要がない。ホーム画面に追加するのはトークンを消した後のURLでよい。
+2. **通らなかったトークンは保存しない** — 401 のときは保存済みトークンを破棄してから
+   入力欄を出す。誤入力が localStorage に焼き付いて毎回 401 になるのを防ぐ。
+   （旧実装は `window.prompt` の入力を検証前に保存しており、一度間違えると
+   `HTTP 401` の画面から復帰できなくなっていた）
+3. **入力欄は画面内に出す** — `window.prompt` は iframe 内で扱いにくく、貼り付けもしづらい。
+
+`APP_TOKEN` は Cloudflare のシークレットで、**設定後は値を読み出せない**。
+紛失したら次で入れ替える（Worker は再デプロイ不要、即時反映）。
+
+```sh
+npx wrangler secret put APP_TOKEN --name progrit-study-log-worker
+```
+
 ## Cloudflare セットアップ（初回のみ）
 
 ```sh

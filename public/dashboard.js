@@ -9,20 +9,8 @@
 const WORKER = 'https://progrit-study-log-worker.ybrnc777.workers.dev/api/progrit';
 const PAGE_VERSION = 'v2026.08.01c（クール別タブ対応）';
 
-// Worker側がBearer認証必須になったため、初回にトークンを1度だけ入力して
-// localStorageに保存する。401が返ったら（未入力 or トークン変更後）再入力を促す。
-const TOKEN_KEY = 'progritAppToken';
-async function fetchWithToken(url) {
-  const saved = (localStorage.getItem(TOKEN_KEY) || '').trim();
-  let res = await fetch(url, saved ? { headers: { Authorization: 'Bearer ' + saved } } : undefined);
-  if (res.status === 401) {
-    const entered = (window.prompt('アクセストークンを入力してください') || '').trim();
-    if (!entered) return res;
-    localStorage.setItem(TOKEN_KEY, entered);
-    res = await fetch(url, { headers: { Authorization: 'Bearer ' + entered } });
-  }
-  return res;
-}
+// Worker側がBearer認証必須。トークンの保存・付与・入れ直しは auth.js の
+// fetchWithToken に集約してある（各HTMLが dashboard.js より先に読み込む）。
 const C = { shadow:'#4FC3F7', speed:'#81C784', oral:'#FFB74D', vocab:'#CE93D8', listen:'#F06292', speech:'#FFD54F', repeat:'#8BC34A' };
 const DOW_NAMES = ['日','月','火','水','木','金','土'];
 

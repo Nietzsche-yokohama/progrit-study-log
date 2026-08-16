@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>進捗</title>
 <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
+<script src="auth.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
   *{margin:0;padding:0;box-sizing:border-box}
@@ -91,20 +92,8 @@
 <script>
 const WORKER = 'https://progrit-study-log-worker.ybrnc777.workers.dev/api/progrit';
 
-// Worker側がBearer認証必須になったため、初回にトークンを1度だけ入力して
-// localStorageに保存する。401が返ったら（未入力 or トークン変更後）再入力を促す。
-const TOKEN_KEY = 'progritAppToken';
-async function fetchWithToken(url) {
-  const saved = (localStorage.getItem(TOKEN_KEY) || '').trim();
-  let res = await fetch(url, saved ? { headers: { Authorization: 'Bearer ' + saved } } : undefined);
-  if (res.status === 401) {
-    const entered = (window.prompt('アクセストークンを入力してください') || '').trim();
-    if (!entered) return res;
-    localStorage.setItem(TOKEN_KEY, entered);
-    res = await fetch(url, { headers: { Authorization: 'Bearer ' + entered } });
-  }
-  return res;
-}
+// Worker側がBearer認証必須。トークンの保存・付与・入れ直しは auth.js の
+// fetchWithToken に集約してある。
 const GOAL_H = 2.5;              // 1日の目標学習時間
 const GOAL_MIN = GOAL_H * 60;    // = 150分
 const PROGRAM_WEEKS = 12;        // プログラム全期間（週次タブはこの週数まで表示）
