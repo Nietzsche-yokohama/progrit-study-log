@@ -47,8 +47,18 @@ Worker は `Authorization: Bearer <APP_TOKEN>` を要求する。フロント側
    `HTTP 401` の画面から復帰できなくなっていた）
 3. **入力欄は画面内に出す** — `window.prompt` は iframe 内で扱いにくく、貼り付けもしづらい。
 
-`APP_TOKEN` は Cloudflare のシークレットで、**設定後は値を読み出せない**。
-紛失したら次で入れ替える（Worker は再デプロイ不要、即時反映）。
+### 入れ替え手順（値は読み出せないので、紛失したら再発行するしかない）
+
+**正本は GitHub Secrets の `APP_TOKEN`**。`.github/workflows/deploy.yml` が push のたびに
+`wrangler secret put APP_TOKEN` で Cloudflare 側へ焼き直すため、**Cloudflare だけ変えても
+次の push で元に戻る**。必ず GitHub 側から入れ替えること。
+
+```sh
+gh secret set APP_TOKEN --repo Nietzsche-yokohama/progrit-study-log --body '<新しいトークン>'
+gh run rerun <最新のrun id> --repo Nietzsche-yokohama/progrit-study-log   # Cloudflare側へ反映
+```
+
+急ぎで Cloudflare 側だけ直す場合は次（ただし上記の理由で一時的）。
 
 ```sh
 npx wrangler secret put APP_TOKEN --name progrit-study-log-worker
