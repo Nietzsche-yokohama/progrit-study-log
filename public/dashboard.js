@@ -7,12 +7,16 @@
 // 表示不一致の再発を防ぐ。
 
 const WORKER = 'https://progrit-study-log-worker.ybrnc777.workers.dev/api/progrit';
-const PAGE_VERSION = 'v2026.08.01c（クール別タブ対応）';
+const PAGE_VERSION = 'v2026.09.01（瞬間英作文への改名対応）';
 
 // Worker側がBearer認証必須。トークンの保存・付与・入れ直しは auth.js の
 // fetchWithToken に集約してある（各HTMLが dashboard.js より先に読み込む）。
 const C = { shadow:'#4FC3F7', speed:'#81C784', oral:'#FFB74D', vocab:'#CE93D8', listen:'#F06292', speech:'#FFD54F', repeat:'#8BC34A' };
 const DOW_NAMES = ['日','月','火','水','木','金','土'];
+
+// Day130で「口頭英作文」は「瞬間英作文」に改名された（同一科目としてWorker側で o に合算済み）。
+// 改名前に終わった第一クール（Day1〜91）だけは当時の名称のまま表示する。
+const ORAL_LABEL = DASHBOARD_CONFIG.cycleKey === 'cycle1' ? '口頭英作文' : '瞬間英作文';
 
 async function init() {
   try {
@@ -116,7 +120,7 @@ function render(RAW, fetchedAt, summary, rangeNote) {
     {name:'シャドーイング', val:sTotal,  color:C.shadow},
     {name:'速読',          val:spTotal, color:C.speed},
     {name:'単語',          val:vTotal,  color:C.vocab},
-    {name:'口頭英作文',    val:oTotal,  color:C.oral},
+    {name:ORAL_LABEL,      val:oTotal,  color:C.oral},
     {name:'多聴',          val:liTotal, color:C.listen},
     {name:'1分間スピーチ', val:scTotal, color:C.speech},
     {name:'リピーティング', val:rpTotal, color:C.repeat},
@@ -195,7 +199,7 @@ function render(RAW, fetchedAt, summary, rangeNote) {
   // 4. 優先②＝単語・英作文（インプット→アウトプットの連結）
   const p2 = vTotal + oTotal;
   insights.push({type:'', icon:'✍️', html:
-    `<strong>単語＆英作文も着実に積み上がり。</strong>　優先②の2科目で合計 <strong>${fmt(p2)}分</strong>（単語 ${fmt(vTotal)}分／口頭英作文 ${fmt(oTotal)}分）。覚えた単語を英作文ですぐ使うと、“知っている”が“使える”に変わります。`});
+    `<strong>単語＆英作文も着実に積み上がり。</strong>　優先②の2科目で合計 <strong>${fmt(p2)}分</strong>（単語 ${fmt(vTotal)}分／${ORAL_LABEL} ${fmt(oTotal)}分）。覚えた単語を英作文ですぐ使うと、“知っている”が“使える”に変わります。`});
 
   // 5. 単語のムラ（強みを認めつつ安定化を促す）
   const vocabs = RAW.map(r => r.v);
@@ -262,7 +266,7 @@ function render(RAW, fetchedAt, summary, rangeNote) {
   // 2. Donut
   const subjTotals = [sTotal, spTotal, oTotal, vTotal, liTotal, scTotal, rpTotal];
   const donutData = subjTotals.filter(v => v > 0);
-  const donutLabels = ['シャドーイング','速読','口頭英作文','単語','多聴','1分間スピーチ','リピーティング'].filter((_,i) => subjTotals[i] > 0);
+  const donutLabels = ['シャドーイング','速読',ORAL_LABEL,'単語','多聴','1分間スピーチ','リピーティング'].filter((_,i) => subjTotals[i] > 0);
   const donutColors = [C.shadow, C.speed, C.oral, C.vocab, C.listen, C.speech, C.repeat].filter((_,i) => subjTotals[i] > 0);
   new Chart(document.getElementById('donutChart'), {
     type: 'doughnut',
@@ -281,7 +285,7 @@ function render(RAW, fetchedAt, summary, rangeNote) {
       datasets: [
         { label: 'シャドーイング', data: RAW.map(r=>r.s),  backgroundColor: C.shadow,  stack: 'a' },
         { label: '速読',          data: RAW.map(r=>r.sp), backgroundColor: C.speed,   stack: 'a' },
-        { label: '口頭英作文',    data: RAW.map(r=>r.o),  backgroundColor: C.oral,    stack: 'a' },
+        { label: ORAL_LABEL,      data: RAW.map(r=>r.o),  backgroundColor: C.oral,    stack: 'a' },
         { label: '単語',          data: RAW.map(r=>r.v),  backgroundColor: C.vocab,   stack: 'a' },
         { label: '多聴',          data: RAW.map(r=>r.li), backgroundColor: C.listen,  stack: 'a' },
         { label: '1分間スピーチ', data: RAW.map(r=>r.sc||0), backgroundColor: C.speech,  stack: 'a' },
@@ -336,7 +340,7 @@ function render(RAW, fetchedAt, summary, rangeNote) {
       datasets: [
         { label:'シャドーイング', data:movAvg(RAW.map(r=>r.s)),  borderColor:C.shadow, backgroundColor:'transparent', tension:0.4, pointRadius:0, borderWidth:2 },
         { label:'速読',          data:movAvg(RAW.map(r=>r.sp)), borderColor:C.speed,  backgroundColor:'transparent', tension:0.4, pointRadius:0, borderWidth:2 },
-        { label:'口頭英作文',    data:movAvg(RAW.map(r=>r.o)),  borderColor:C.oral,   backgroundColor:'transparent', tension:0.4, pointRadius:0, borderWidth:2 },
+        { label:ORAL_LABEL,      data:movAvg(RAW.map(r=>r.o)),  borderColor:C.oral,   backgroundColor:'transparent', tension:0.4, pointRadius:0, borderWidth:2 },
         { label:'単語',          data:movAvg(RAW.map(r=>r.v)),  borderColor:C.vocab,  backgroundColor:'transparent', tension:0.4, pointRadius:0, borderWidth:2 },
         { label:'1分間スピーチ', data:movAvg(RAW.map(r=>r.sc||0)), borderColor:C.speech, backgroundColor:'transparent', tension:0.4, pointRadius:0, borderWidth:2 },
         { label:'リピーティング', data:movAvg(RAW.map(r=>r.rp||0)), borderColor:C.repeat, backgroundColor:'transparent', tension:0.4, pointRadius:0, borderWidth:2 },

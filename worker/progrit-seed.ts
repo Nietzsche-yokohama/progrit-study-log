@@ -8,7 +8,7 @@
 // 各行: [d, s, sp, o, v, li]（単位: 分）
 //   s  = シャドーイング / 音声知覚
 //   sp = 速読 / 意味理解
-//   o  = 口頭英作文 / 文章化
+//   o  = 口頭英作文 / 文章化（Day130から「瞬間英作文」に改名。同一科目として扱う）
 //   v  = 単語
 //   li = 多聴 / 概念化
 export const PROGRIT_SEED: [number, number, number, number, number, number][] = [

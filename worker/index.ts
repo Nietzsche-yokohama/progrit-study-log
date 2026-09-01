@@ -54,7 +54,8 @@ interface ProgritDay {
 // 既知の科目一覧（sumMin の抽出キーワードと1対1対応）。
 // Slackに新しい科目が追加されたら、必ずここにも追記すること。
 // 追記を忘れても /api/progrit の unknownSubjects に自動で出てくるので気付ける。
-const KNOWN_SUBJECTS = ['シャドーイング', '速読', '口頭英作文', '単語', '多聴', 'スピーチ', 'リピーティング'];
+// 「口頭英作文」はDay130から「瞬間英作文」に改名された（同一科目として o に合算）。
+const KNOWN_SUBJECTS = ['シャドーイング', '速読', '口頭英作文', '瞬間英作文', '単語', '多聴', 'スピーチ', 'リピーティング'];
 
 // 学習1日目の実日付。d番号から実日付を導出する（Slackの投稿日時は
 // 後追い・まとめ投稿でずれるため、日付の基準には使わない）。
@@ -124,7 +125,8 @@ function parseProgritMessages(messages: SlackMessage[]): ProgritDay[] {
 
       const s  = sumMin(block, 'シャドーイング');
       const sp = sumMin(block, '速読');
-      const o  = sumMin(block, '口頭英作文');
+      // Day130から「口頭英作文」→「瞬間英作文」に改名。同一科目なので合算する。
+      const o  = sumMin(block, '口頭英作文') + sumMin(block, '瞬間英作文');
       const v  = sumMin(block, '単語');
       const li = sumMin(block, '多聴');
       // 「1分間スピーチ」等の表記ゆれを拾うため「スピーチ」で照合する。
@@ -139,6 +141,20 @@ function parseProgritMessages(messages: SlackMessage[]): ProgritDay[] {
   }
 
   return Array.from(dayMap.values()).sort((a, b) => a.d - b.d);
+}
+
+// Day130の改名（口頭英作文→瞬間英作文）にパーサーが追従する前にSlackから取り込まれ、
+// unknown としてKVに保存済みの分を o に付け替える。Slackの90日保持で元メッセージが
+// 消えていても直せるよう、再取得ではなく保存データ側を補正する。補正済みならno-op。
+function migrateRenamedSubjects(days: ProgritDay[]): void {
+  for (const d of days) {
+    if (!d.unknown || d.unknown.length === 0) continue;
+    d.unknown = d.unknown.filter((u) => {
+      if (!u.label.includes('瞬間英作文')) return true;
+      d.o += u.min;
+      return false;
+    });
+  }
 }
 
 // 全期間の合計・未知科目サマリをサーバー側で一度だけ計算する。
@@ -234,6 +250,10 @@ export default {
     if (master.days.length === 0) {
       master.days = PROGRIT_SEED.map((t) => makeDay(t[0], t[1], t[2], t[3], t[4], t[5]));
     }
+
+    // 改名前パーサーで unknown 扱いのままKVに残っている分を補正する（冪等）。
+    // 次のSlack差分取得（X-Cache: MISS）のタイミングで補正後の状態が永続化される。
+    migrateRenamedSubjects(master.days);
 
     // 30分以内に更新済みならキャッシュ返却
     if (Date.now() - master.savedAt < REFRESH_MS && master.days.length > 0) {
