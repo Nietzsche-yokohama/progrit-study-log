@@ -1,5 +1,5 @@
 import type { KVNamespace } from '@cloudflare/workers-types';
-import { PROGRIT_SEED } from './progrit-seed';
+import { PROGRIT_SEED, type SeedRow } from './progrit-seed';
 
 export interface Env {
   PROGRIT_KV: KVNamespace;
@@ -77,6 +77,64 @@ function makeDay(
   };
 }
 
+function makeDayFromRow(t: SeedRow): ProgritDay {
+  return makeDay(t[0], t[1], t[2], t[3], t[4], t[5], t[6] ?? 0, t[7] ?? 0);
+}
+
+// 第一クール／第二クールの境目。Slack本文でDay92が「ネクストコース1日目」と
+// 明言されているため、Day91までを第一クール、Day92以降を第二クールとして固定する。
+// 第三クールが始まったら CYCLE_START_DAYS に開始Dayを追加し、buildCycles にも定義を足すこと。
+const CYCLE_BOUNDARY_DAY = 91;
+const CYCLE_START_DAYS = [1, CYCLE_BOUNDARY_DAY + 1];
+
+// Slackの「N日目」を、第一クールから通算したDay番号に直す。
+// 第二クール以降の投稿は「そのクールのN日目」で書く運用にした（例:「50日目」= 通算Day141）。
+// 通算で書かれた投稿（「139日目」）もそのまま通す必要があるため、各クールの開始Dayを
+// 基点にした候補（N, N+91, …）のうち、投稿日時にいちばん近い実日付になるものを採る。
+//   6/11 に投稿された「48日目」→ Day48（第一クール）
+//   9/10 に投稿された「48日目」→ Day139（第二クール48日目 = 9/9）
+//   9/10 に投稿された「139日目」→ Day139（通算表記もそのまま通る）
+// 候補同士は91日以上離れているので、数日〜数週間の後追い投稿でも取り違えない。
+export function resolveAbsoluteDay(n: number, tsSec: number): number {
+  if (!(tsSec > 0)) return n;
+  const postedElapsedDays = (tsSec * 1000 - BASE_UTC) / 86400000; // 学習1日目からの経過日数
+  let best = n;
+  let bestDist = Infinity;
+  for (const start of CYCLE_START_DAYS) {
+    const cand = n + start - 1;
+    const dist = Math.abs(cand - 1 - postedElapsedDays);
+    if (dist < bestDist) {
+      best = cand;
+      bestDist = dist;
+    }
+  }
+  return best;
+}
+
+// 第一クール(d1〜CYCLE_BOUNDARY_DAY)はリポジトリ内のシード(progrit-seed.ts)が正本。
+// KVの内容がどうであれ、毎回シードの値に戻す（冪等）。誤った日番号の投稿で
+// KV側が上書きされても、次のリクエストで元に戻り、次の差分取得時に永続化される。
+export function applyLockedSeed(days: ProgritDay[]): ProgritDay[] {
+  const map = new Map<number, ProgritDay>(days.map((d) => [d.d, d]));
+  for (const t of PROGRIT_SEED) map.set(t[0], makeDayFromRow(t));
+  return Array.from(map.values()).sort((a, b) => a.d - b.d);
+}
+
+// Slackから取り込めなかった投稿の手動補完。KVにその日が無いときだけ追加する
+// （Slackに再投稿されれば、そちらが勝つ）。Slack上でメッセージを編集しても ts は
+// 変わらず差分取得（oldest=lastMsgTs）に乗らないため、編集で直した投稿はここで補う。
+const MANUAL_DAYS: SeedRow[] = [
+  // Day139(9/9): 「48日目」と誤記して投稿し、Slack上で「139日目」に編集済み。
+  // 瞬間英作文 18+28+27+25=98分、単語(日→英) 12分
+  [139, 0, 0, 98, 12, 0],
+];
+
+export function applyManualDays(days: ProgritDay[], manual: SeedRow[] = MANUAL_DAYS): ProgritDay[] {
+  const map = new Map<number, ProgritDay>(days.map((d) => [d.d, d]));
+  for (const t of manual) if (!map.has(t[0])) map.set(t[0], makeDayFromRow(t));
+  return Array.from(map.values()).sort((a, b) => a.d - b.d);
+}
+
 // ブロック内の「科目名 N分」形式の行のうち、既知科目に一致しないものを拾う。
 // 「1分間スピーチ」のように科目名自体に数字を含むケースは行末の数値だけを
 // 実測値として扱うため誤検知しない。新科目が追加されたときの取りこぼし検知に使う。
@@ -93,7 +151,7 @@ function findUnknownEntries(block: string, knownSubjects: string[]): UnknownEntr
   return result;
 }
 
-function parseProgritMessages(messages: SlackMessage[]): ProgritDay[] {
+export function parseProgritMessages(messages: SlackMessage[]): ProgritDay[] {
   // 指定科目の「○分」を全て合計する。1日に同じ科目を複数回書いても取りこぼさない。
   const sumMin = (text: string, subject: string): number => {
     const re = new RegExp(subject + '[^0-9]*?(\\d+)\\s*分', 'g');
@@ -118,7 +176,8 @@ function parseProgritMessages(messages: SlackMessage[]): ProgritDay[] {
     // 1つのメッセージに複数の「N日目」が含まれる場合に備え、日付ヘッダごとに分割する。
     const heads = Array.from(text.matchAll(headerRe));
     for (let i = 0; i < heads.length; i++) {
-      const day = parseInt(heads[i][1], 10);
+      // 「N日目」はクール内の相対日数の可能性があるので、投稿日時から通算Dayに直す
+      const day = resolveAbsoluteDay(parseInt(heads[i][1], 10), parseFloat(msg.ts || '0'));
       const start = (heads[i].index ?? 0) + heads[i][0].length;
       const end = i + 1 < heads.length ? (heads[i + 1].index ?? text.length) : text.length;
       const block = text.slice(start, end);
@@ -184,11 +243,6 @@ function summarize(days: ProgritDay[]) {
   return { totalDays: days.length, activeDays, totalMinutes, unknownSubjects };
 }
 
-// 第一クール／第二クールの境目。Slack本文でDay92が「ネクストコース1日目」と
-// 明言されているため、Day91までを第一クール、Day92以降を第二クールとして固定する。
-// 第三クールが始まったら、ここに境目を追加してcyclesの定義を増やすこと。
-const CYCLE_BOUNDARY_DAY = 91;
-
 // 各クールの集計もsummarize()を再利用して計算する。フロント側（クール別タブ）は
 // このcyclesをそのまま表示に使い、クールの境目や合計をページ側で持たない。
 function buildCycles(days: ProgritDay[]) {
@@ -244,12 +298,13 @@ export default {
       if (stored) master = JSON.parse(stored) as ProgritMaster;
     } catch { /* 初回 or 破損 → 空スタート */ }
 
-    // KVが空（初回 or KV消失）ならリポジトリ内の確定シードで days を初期化する。
-    // Slackは90日でメッセージが消えるため、これが過去データの恒久バックアップになる。
-    // 以降のSlack差分取得は lastMsgTs='0' から全件取得し、シードに上書きマージされる。
-    if (master.days.length === 0) {
-      master.days = PROGRIT_SEED.map((t) => makeDay(t[0], t[1], t[2], t[3], t[4], t[5]));
-    }
+    // 第一クール(d1〜91)は常にリポジトリ内のシードの値に固定する。KVが空（初回 or KV消失）
+    // ならこれが初期データになり、KVにデータがあっても第一クール分はシードで上書きし直す。
+    // Slackは90日でメッセージが消えるため、シードが過去データの恒久バックアップになる。
+    master.days = applyLockedSeed(master.days);
+
+    // Slackから取り込めなかった投稿（編集で直した投稿など）を補完する。既にあればno-op。
+    master.days = applyManualDays(master.days);
 
     // 改名前パーサーで unknown 扱いのままKVに残っている分を補正する（冪等）。
     // 次のSlack差分取得（X-Cache: MISS）のタイミングで補正後の状態が永続化される。
@@ -303,9 +358,9 @@ export default {
         // 新しいメッセージを既存daysとマージ（同じ日番号は上書き）
         const newDays = parseProgritMessages(newMessages);
         const dayMap = new Map<number, ProgritDay>(master.days.map((d) => [d.d, d]));
-        // シード範囲(d1〜d42)は後日補正込みの確定値なので、Slack再取得で上書きしない。
-        const seedMaxD = PROGRIT_SEED[PROGRIT_SEED.length - 1][0];
-        for (const d of newDays) if (d.d > seedMaxD) dayMap.set(d.d, d);
+        // 第一クール(d1〜91)は終了済みの確定値（シードが正本）なので、Slack再取得で上書きしない。
+        // 誤った日番号で投稿されても第一クールの数字は動かない。
+        for (const d of newDays) if (d.d > CYCLE_BOUNDARY_DAY) dayMap.set(d.d, d);
         master.days = Array.from(dayMap.values()).sort((a, b) => a.d - b.d);
 
         // 最新メッセージのts（Slackはtimestamp降順で返す）を記録
