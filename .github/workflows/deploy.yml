@@ -18,6 +18,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # パーサーが壊れたままデプロイしない（未知科目の自動検出・合計の整合を固定したテスト）
+      - name: Typecheck and test worker
+        run: npm run typecheck && npm test
+
       - name: Ensure Pages project exists
         run: npx wrangler pages project create progrit-study-log --production-branch=main || true
         env:

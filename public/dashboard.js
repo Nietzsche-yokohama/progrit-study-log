@@ -5,18 +5,45 @@
 // クールの境目（何日目まで）はWorker側(/api/progrit の cycles)が単一の情報源。
 // このファイルやHTML側に日数を決め打ちしないことで、境目のズレによる
 // 表示不一致の再発を防ぐ。
+//
+// 科目の一覧も Worker 側（summary.subjects）が単一の情報源。このファイルは科目名を
+// 決め打ちせず、サーバーが返した科目をそのまま集計・グラフ・凡例に並べる。
+// Slackに新しい科目が増えても、このファイルを直さなくても自動で表示に組み込まれる。
 
 const WORKER = 'https://progrit-study-log-worker.ybrnc777.workers.dev/api/progrit';
-const PAGE_VERSION = 'v2026.09.01（瞬間英作文への改名対応）';
+const PAGE_VERSION = 'v2026.09.21（科目の自動組み込み）';
 
 // Worker側がBearer認証必須。トークンの保存・付与・入れ直しは auth.js の
 // fetchWithToken に集約してある（各HTMLが dashboard.js より先に読み込む）。
-const C = { shadow:'#4FC3F7', speed:'#81C784', oral:'#FFB74D', vocab:'#CE93D8', listen:'#F06292', speech:'#FFD54F', repeat:'#8BC34A' };
+
+// 固定科目の色（キーは Worker の SUBJECTS と同じ）。ここに無い科目（自動検出科目や、
+// Worker側に追加しただけの固定科目）は FALLBACK_COLORS から登場順に割り当てる。
+const SUBJECT_COLORS = {
+  s: '#4FC3F7', sp: '#81C784', o: '#FFB74D', v: '#CE93D8', li: '#F06292',
+  sc: '#FFD54F', rp: '#8BC34A', oe: '#4DB6AC',
+};
+const FALLBACK_COLORS = ['#BA68C8', '#4DD0E1', '#AED581', '#FF8A65', '#7986CB', '#A1887F', '#90A4AE', '#DCE775'];
 const DOW_NAMES = ['日','月','火','水','木','金','土'];
 
 // Day130で「口頭英作文」は「瞬間英作文」に改名された（同一科目としてWorker側で o に合算済み）。
 // 改名前に終わった第一クール（Day1〜91）だけは当時の名称のまま表示する。
-const ORAL_LABEL = DASHBOARD_CONFIG.cycleKey === 'cycle1' ? '口頭英作文' : '瞬間英作文';
+const LABEL_OVERRIDES = DASHBOARD_CONFIG.cycleKey === 'cycle1' ? { o: '口頭英作文' } : {};
+
+// summary.subjects を描画用の科目リストにする。
+//   { key, label, auto, color, min(r) -> その日の分数, total, firstDay, ... }
+function buildSubjects(summary) {
+  if (!summary || !Array.isArray(summary.subjects)) {
+    throw new Error('Worker が古いバージョンです（summary.subjects がありません）');
+  }
+  let fallbackIdx = 0;
+  return summary.subjects.map(s => {
+    const color = SUBJECT_COLORS[s.key] || FALLBACK_COLORS[fallbackIdx++ % FALLBACK_COLORS.length];
+    const min = s.auto
+      ? (r => (r.x && r.x[s.label]) || 0)
+      : (r => r[s.key] || 0);
+    return { ...s, label: LABEL_OVERRIDES[s.key] || s.label, color, min, total: s.totalMin || 0 };
+  });
+}
 
 async function init() {
   try {
@@ -52,26 +79,28 @@ async function init() {
 }
 
 function fmt(n) { return n.toLocaleString(); }
+function esc(s) { return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 
 function render(RAW, fetchedAt, summary, rangeNote) {
+  // ── 科目リスト（Worker側が正） ─────────────────
+  const SUBJECTS = buildSubjects(summary);
+  const active = SUBJECTS.filter(s => s.total > 0);     // この範囲で1分以上ある科目
+  const T = key => (SUBJECTS.find(s => s.key === key) || { total: 0 }).total;
+  const tot = r => SUBJECTS.reduce((a, s) => a + s.min(r), 0);
+
   // ── 基本計算 ────────────────────────────────
   // 合計は必ずWorker側(summary.totalMinutes)を正とする。ページ内で独自に合計を
   // 再計算して画面間で数字が食い違う、という事態を構造的に防ぐため。
   const N = RAW.length;
-  const totals = RAW.map(r => r.s + r.sp + r.o + r.v + r.li + (r.sc || 0) + (r.rp || 0));
+  const totals = RAW.map(tot);
   const localTotalMin = totals.reduce((a,b) => a+b, 0);
-  const totalMin = summary ? summary.totalMinutes : localTotalMin;
+  const totalMin = summary.totalMinutes;
   const totalHrs = (totalMin / 60).toFixed(1);
   const avgMin = (totalMin / N).toFixed(1);
 
-  // ── 警告バナー：未知科目・サーバー側合計とのズレ検知 ──────
+  // ── 警告バナー：サーバー側合計とのズレ検知 ──────
   const warnLines = [];
-  if (summary && summary.unknownSubjects && summary.unknownSubjects.length > 0) {
-    summary.unknownSubjects.forEach(u => {
-      warnLines.push(`未対応の学習項目「${u.label}」を検出：合計${u.totalMin}分（${u.days.map(d=>'Day'+d).join(', ')}）。集計から漏れています。パーサーへの追加が必要です。`);
-    });
-  }
-  if (summary && Math.abs(summary.totalMinutes - localTotalMin) > 0) {
+  if (Math.abs(summary.totalMinutes - localTotalMin) > 0) {
     warnLines.push(`サーバー側の合計（${summary.totalMinutes}分）とこのページの再計算結果（${localTotalMin}分）が一致しません。表示ロジックにバグの可能性があります。`);
   }
   const warnBanner = document.getElementById('warnBanner');
@@ -81,17 +110,29 @@ function render(RAW, fetchedAt, summary, rangeNote) {
   } else {
     warnBanner.style.display = 'none';
   }
+
+  // ── お知らせバナー：新しく加わった科目（自動で集計に組み込み済み） ──
+  // 自動検出は「科目名 N分」の行をそのまま科目にするため、誤検出（集計行など）に
+  // 気付けるよう、直近2週間以内に初登場した科目はここに出す。
+  const infoLines = (summary.newSubjects || []).map(ns => {
+    const s = SUBJECTS.find(x => x.key === ns.key) || ns;
+    return `新しい学習項目「${esc(s.label)}」を集計に組み込みました（Day${ns.firstDay}〜、合計${fmt(ns.totalMin)}分）。` +
+      (ns.auto ? '科目名は投稿の表記をそのまま使っています。' : '');
+  });
+  const infoBanner = document.getElementById('infoBanner');
+  if (infoBanner) {
+    if (infoLines.length > 0) {
+      infoBanner.style.display = 'block';
+      infoBanner.innerHTML = '<strong>🆕 新しい科目</strong><br>' + infoLines.join('<br>');
+    } else {
+      infoBanner.style.display = 'none';
+    }
+  }
+
   const maxMin = Math.max(...totals);
   const minMin = Math.min(...totals);
   const maxDay = RAW[totals.indexOf(maxMin)];
   const minDay = RAW[totals.indexOf(minMin)];
-  const sTotal  = RAW.reduce((a,r) => a+r.s,  0);
-  const spTotal = RAW.reduce((a,r) => a+r.sp, 0);
-  const oTotal  = RAW.reduce((a,r) => a+r.o,  0);
-  const vTotal  = RAW.reduce((a,r) => a+r.v,  0);
-  const liTotal = RAW.reduce((a,r) => a+r.li, 0);
-  const scTotal = RAW.reduce((a,r) => a+(r.sc||0), 0);
-  const rpTotal = RAW.reduce((a,r) => a+(r.rp||0), 0);
 
   const labels = RAW.map(r => `Day${r.d}\n${r.date}(${r.dow})`);
   const shortLabels = RAW.map(r => r.date);
@@ -104,7 +145,9 @@ function render(RAW, fetchedAt, summary, rangeNote) {
     `<span class="badge">${N}日間${rangeNote}</span><span class="badge">よこはま（横浜一輝）</span>`;
 
   // ── KPI ─────────────────────────────────────
-  const subjectCount = [sTotal,spTotal,oTotal,vTotal,liTotal,scTotal,rpTotal].filter(v=>v>0).length;
+  const subjectCount = active.length;
+  const newest = active.slice().sort((a,b) => (b.firstDay||0) - (a.firstDay||0))[0];
+  const newestNote = newest && newest.firstDay > 1 ? `最新: ${esc(newest.label)} 追加（Day${newest.firstDay}〜）` : '';
   const zeroDaysForKpi = totals.filter(t => t === 0).length;
   document.getElementById('kpiGrid').innerHTML = `
     <div class="kpi hl"><div class="val" style="color:#58a6ff">${totalHrs}</div><div class="lbl">総学習時間（時間）</div><div class="sub">${fmt(totalMin)} 分</div></div>
@@ -112,33 +155,32 @@ function render(RAW, fetchedAt, summary, rangeNote) {
     <div class="kpi hl"><div class="val" style="color:#81C784">${N}</div><div class="lbl">対象日数</div><div class="sub">${zeroDaysForKpi === 0 ? '🔥 皆勤継続中' : `記録なし${zeroDaysForKpi}日`}</div></div>
     <div class="kpi"><div class="val">${maxMin}</div><div class="lbl">最高記録（分）</div><div class="sub">${maxDay.date}（${maxDay.dow}）Day${maxDay.d}</div></div>
     <div class="kpi"><div class="val" style="color:#F06292">${minMin}</div><div class="lbl">最低記録（分）</div><div class="sub">${minDay.date}（${minDay.dow}）Day${minDay.d}</div></div>
-    <div class="kpi"><div class="val">${subjectCount}</div><div class="lbl">学習科目数</div><div class="sub">${rpTotal>0?'最新: リピーティング 追加':(scTotal>0?'最新: 1分間スピーチ 追加':(liTotal>0?'最新: 多聴 追加':''))}</div></div>
+    <div class="kpi"><div class="val">${subjectCount}</div><div class="lbl">学習科目数</div><div class="sub">${newestNote}</div></div>
   `;
 
   // ── 科目リスト ────────────────────────────────
-  const subjData = [
-    {name:'シャドーイング', val:sTotal,  color:C.shadow},
-    {name:'速読',          val:spTotal, color:C.speed},
-    {name:'単語',          val:vTotal,  color:C.vocab},
-    {name:ORAL_LABEL,      val:oTotal,  color:C.oral},
-    {name:'多聴',          val:liTotal, color:C.listen},
-    {name:'1分間スピーチ', val:scTotal, color:C.speech},
-    {name:'リピーティング', val:rpTotal, color:C.repeat},
-  ].filter(s => s.val > 0).sort((a,b) => b.val - a.val);
-  const maxSubj = subjData[0]?.val || 1;
+  const subjData = active.slice().sort((a,b) => b.total - a.total);
+  const maxSubj = subjData[0]?.total || 1;
   document.getElementById('subjList').innerHTML = subjData.map(s =>
     `<div class="subj-row">
-      <span class="subj-name" style="color:${s.color}">${s.name}</span>
-      <div class="bar-wrap"><div class="bar-fill" style="width:${(s.val/maxSubj*100).toFixed(1)}%;background:${s.color}"></div></div>
-      <span class="subj-mins">${fmt(s.val)}分</span>
+      <span class="subj-name" style="color:${s.color}">${esc(s.label)}</span>
+      <div class="bar-wrap"><div class="bar-fill" style="width:${(s.total/maxSubj*100).toFixed(1)}%;background:${s.color}"></div></div>
+      <span class="subj-mins">${fmt(s.total)}分</span>
     </div>`
   ).join('');
 
+  // ── 積み上げグラフの凡例（科目リストから生成） ──────────
+  const legend = document.getElementById('stackLegend');
+  if (legend) {
+    legend.innerHTML = active.map(s =>
+      `<span class="leg-item"><span class="leg-dot" style="background:${s.color}"></span>${esc(s.label)}</span>`
+    ).join('');
+  }
+
   // ── 曜日別 ───────────────────────────────────
   const dowGroups = Array.from({length:7}, () => ({sum:0, n:0}));
-  RAW.forEach(r => {
-    const tot = r.s + r.sp + r.o + r.v + r.li + (r.sc || 0) + (r.rp || 0);
-    dowGroups[r.dowIdx].sum += tot;
+  RAW.forEach((r, i) => {
+    dowGroups[r.dowIdx].sum += totals[i];
     dowGroups[r.dowIdx].n++;
   });
   const dowAvgs = dowGroups.map(g => g.n ? Math.round(g.sum/g.n) : 0);
@@ -161,8 +203,10 @@ function render(RAW, fetchedAt, summary, rangeNote) {
   const insights = [];
   const pct = v => totalMin ? Math.round(v / totalMin * 100) : 0;
   const recentN = Math.min(7, N);
-  const recentAvg = Math.round(RAW.slice(-recentN).reduce((a,r)=>a+r.s+r.sp+r.o+r.v+r.li+(r.sc||0)+(r.rp||0),0) / recentN);
+  const recentAvg = Math.round(totals.slice(-recentN).reduce((a,b)=>a+b,0) / recentN);
   const overallAvg = Math.round(totalMin / N);
+  const sTotal = T('s'), spTotal = T('sp'), oTotal = T('o'), vTotal = T('v'), liTotal = T('li');
+  const oralLabel = LABEL_OVERRIDES.o || '瞬間英作文';
 
   // 1. 継続の称賛（モチベの土台）※ 実際に0分の日がないかを必ず確認してから断定する
   const zeroDays = RAW.filter((r, i) => totals[i] === 0);
@@ -187,7 +231,7 @@ function render(RAW, fetchedAt, summary, rangeNote) {
 
   // 3. 最優先＝シャドーイング
   const sShare = pct(sTotal);
-  const topIsShadow = sTotal >= Math.max(spTotal, oTotal, vTotal, liTotal, scTotal, rpTotal);
+  const topIsShadow = sTotal >= Math.max(0, ...SUBJECTS.filter(s => s.key !== 's').map(s => s.total));
   if (topIsShadow) {
     insights.push({type:'good', icon:'🎙️', html:
       `<strong>最優先のシャドーイングが土台になっています。</strong>　全体の <strong>${sShare}%</strong>（${fmt(sTotal)}分）で全科目中もっとも多く、優先順位どおりに時間を使えています。発音と音声知覚の伸びはここで決まる——いい配分です。`});
@@ -199,10 +243,10 @@ function render(RAW, fetchedAt, summary, rangeNote) {
   // 4. 優先②＝単語・英作文（インプット→アウトプットの連結）
   const p2 = vTotal + oTotal;
   insights.push({type:'', icon:'✍️', html:
-    `<strong>単語＆英作文も着実に積み上がり。</strong>　優先②の2科目で合計 <strong>${fmt(p2)}分</strong>（単語 ${fmt(vTotal)}分／${ORAL_LABEL} ${fmt(oTotal)}分）。覚えた単語を英作文ですぐ使うと、“知っている”が“使える”に変わります。`});
+    `<strong>単語＆英作文も着実に積み上がり。</strong>　優先②の2科目で合計 <strong>${fmt(p2)}分</strong>（単語 ${fmt(vTotal)}分／${oralLabel} ${fmt(oTotal)}分）。覚えた単語を英作文ですぐ使うと、“知っている”が“使える”に変わります。`});
 
   // 5. 単語のムラ（強みを認めつつ安定化を促す）
-  const vocabs = RAW.map(r => r.v);
+  const vocabs = RAW.map(r => r.v || 0);
   const vocabMax = Math.max(...vocabs), vocabMin = Math.min(...vocabs);
   if (vocabMax - vocabMin > 60) {
     const peakDay = RAW[vocabs.indexOf(vocabMax)];
@@ -219,7 +263,24 @@ function render(RAW, fetchedAt, summary, rangeNote) {
       `<strong>インプットの幅も広がっています。</strong>　${liNote}速読＋多聴で全体の ${pct(p3)}%。優先③らしく“やり過ぎず・切らさず”の配分ができています。耳と速読の土台づくりは順調です。`});
   }
 
-  // 7. 教材レベルの進化（固定・モチベ）
+  // 7. 実践アウトプット（オンライン英会話）。始めていれば必ず触れる。
+  const oeTotal = T('oe');
+  if (oeTotal > 0) {
+    const oe = SUBJECTS.find(s => s.key === 'oe');
+    const oeDays = RAW.filter(r => (r.oe || 0) > 0).length;
+    insights.push({type:'good', icon:'🗣️', html:
+      `<strong>オンライン英会話で“実戦”が始まりました。</strong>　Day${oe.firstDay}から${oeDays}回・合計 <strong>${fmt(oeTotal)}分</strong>。シャドーイングと瞬間英作文で作った回路を、実際の会話で試す場ができたのは大きな一歩。週2〜3回のペースで続けると、話す前の“詰まり”が目に見えて減ります。`});
+  }
+
+  // 8. その他の新しい科目（自動検出を含む）。直近30日以内に始めたものを称える。
+  const lastD = RAW[N-1].d;
+  const others = active.filter(s => !['s','sp','o','v','li','sc','rp','oe'].includes(s.key) && s.firstDay > lastD - 30);
+  if (others.length > 0) {
+    insights.push({type:'', icon:'🆕', html:
+      `<strong>学習メニューが広がっています。</strong>　${others.map(s => `「${esc(s.label)}」(Day${s.firstDay}〜・${fmt(s.total)}分)`).join('、')} が新たに加わりました。新しい刺激は停滞期を抜ける最短ルートです。`});
+  }
+
+  // 9. 教材レベルの進化（固定・モチベ）
   if (sTotal > 0) {
     insights.push({type:'', icon:'📖', html:
       `<strong>扱う教材が着実にレベルアップ。</strong>　英検®→Keisuke Honda→CosmoPier と難易度が上がっても継続できているのは、実力が付いてきた証拠。「少し難しい」と感じる今が、一番伸びている瞬間です。`});
@@ -264,13 +325,12 @@ function render(RAW, fetchedAt, summary, rangeNote) {
   });
 
   // 2. Donut
-  const subjTotals = [sTotal, spTotal, oTotal, vTotal, liTotal, scTotal, rpTotal];
-  const donutData = subjTotals.filter(v => v > 0);
-  const donutLabels = ['シャドーイング','速読',ORAL_LABEL,'単語','多聴','1分間スピーチ','リピーティング'].filter((_,i) => subjTotals[i] > 0);
-  const donutColors = [C.shadow, C.speed, C.oral, C.vocab, C.listen, C.speech, C.repeat].filter((_,i) => subjTotals[i] > 0);
   new Chart(document.getElementById('donutChart'), {
     type: 'doughnut',
-    data: { labels: donutLabels, datasets: [{ data: donutData, backgroundColor: donutColors, borderWidth: 0 }] },
+    data: {
+      labels: active.map(s => s.label),
+      datasets: [{ data: active.map(s => s.total), backgroundColor: active.map(s => s.color), borderWidth: 0 }]
+    },
     options: {
       responsive: true, maintainAspectRatio: false,
       plugins: { legend: { position: 'bottom', labels: { boxWidth: 10, font: { size: 10 }, color: '#8b949e' } } }
@@ -282,15 +342,7 @@ function render(RAW, fetchedAt, summary, rangeNote) {
     type: 'bar',
     data: {
       labels: shortLabels,
-      datasets: [
-        { label: 'シャドーイング', data: RAW.map(r=>r.s),  backgroundColor: C.shadow,  stack: 'a' },
-        { label: '速読',          data: RAW.map(r=>r.sp), backgroundColor: C.speed,   stack: 'a' },
-        { label: ORAL_LABEL,      data: RAW.map(r=>r.o),  backgroundColor: C.oral,    stack: 'a' },
-        { label: '単語',          data: RAW.map(r=>r.v),  backgroundColor: C.vocab,   stack: 'a' },
-        { label: '多聴',          data: RAW.map(r=>r.li), backgroundColor: C.listen,  stack: 'a' },
-        { label: '1分間スピーチ', data: RAW.map(r=>r.sc||0), backgroundColor: C.speech,  stack: 'a' },
-        { label: 'リピーティング', data: RAW.map(r=>r.rp||0), backgroundColor: C.repeat,  stack: 'a' },
-      ]
+      datasets: active.map(s => ({ label: s.label, data: RAW.map(s.min), backgroundColor: s.color, stack: 'a' })),
     },
     options: {
       responsive: true, maintainAspectRatio: false,
@@ -337,18 +389,14 @@ function render(RAW, fetchedAt, summary, rangeNote) {
     type: 'line',
     data: {
       labels: shortLabels,
-      datasets: [
-        { label:'シャドーイング', data:movAvg(RAW.map(r=>r.s)),  borderColor:C.shadow, backgroundColor:'transparent', tension:0.4, pointRadius:0, borderWidth:2 },
-        { label:'速読',          data:movAvg(RAW.map(r=>r.sp)), borderColor:C.speed,  backgroundColor:'transparent', tension:0.4, pointRadius:0, borderWidth:2 },
-        { label:ORAL_LABEL,      data:movAvg(RAW.map(r=>r.o)),  borderColor:C.oral,   backgroundColor:'transparent', tension:0.4, pointRadius:0, borderWidth:2 },
-        { label:'単語',          data:movAvg(RAW.map(r=>r.v)),  borderColor:C.vocab,  backgroundColor:'transparent', tension:0.4, pointRadius:0, borderWidth:2 },
-        { label:'1分間スピーチ', data:movAvg(RAW.map(r=>r.sc||0)), borderColor:C.speech, backgroundColor:'transparent', tension:0.4, pointRadius:0, borderWidth:2 },
-        { label:'リピーティング', data:movAvg(RAW.map(r=>r.rp||0)), borderColor:C.repeat, backgroundColor:'transparent', tension:0.4, pointRadius:0, borderWidth:2 },
-      ]
+      datasets: active.map(s => ({
+        label: s.label, data: movAvg(RAW.map(s.min)), borderColor: s.color,
+        backgroundColor: 'transparent', tension: 0.4, pointRadius: 0, borderWidth: 2,
+      })),
     },
     options: {
       responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { position:'bottom', labels: { boxWidth:10, font: { size:10 }, color:'#8b949e' } } },
+      plugins: { legend: { position:'bottom', labels: { boxWidth:10, font: { size:10 }, color: '#8b949e' } } },
       scales: {
         x: { grid: { color: gridColor }, ticks: { font: { size:9 }, maxRotation:45, autoSkip:true, maxTicksLimit:15 } },
         y: { grid: { color: gridColor }, ticks: { callback: v => `${v}分` } }

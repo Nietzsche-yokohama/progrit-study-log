@@ -16,6 +16,9 @@
 //   li = 多聴 / 概念化
 //   sc = 1分間スピーチ（Day57から）
 //   rp = リピーティング（Day71から）
+// 第一クールに存在しなかった科目（オンライン英会話 oe、自動検出科目 x など）は
+// この表には持たない（makeDay 側で 0 / {} になる）。第二クール以降の補完は
+// worker/index.ts の MANUAL_POSTS に Slack本文の形式で書く。
 export type SeedRow = [number, number, number, number, number, number, number?, number?];
 export const PROGRIT_SEED: SeedRow[] = [
   [1, 59, 47, 62, 30, 0],
