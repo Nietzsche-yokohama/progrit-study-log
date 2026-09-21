@@ -31,40 +31,86 @@ interface SlackMessage {
   bot_id?: string;
 }
 
+// 旧形式（v2026.08〜09）でKVに残っている「既知科目に当てはまらなかった行」。
+// 現在は読み込み時に x（自動検出科目）または固定科目へ移行するためだけに残している。
 interface UnknownEntry {
-  label: string; // Slack上の行そのままの科目表記（例:「リピーティング」）
+  label: string;
   min: number;
 }
 
-interface ProgritDay {
+export interface ProgritDay {
   d: number;
   date: string;
   dow: string;
   dowIdx: number;
-  s: number;
-  sp: number;
-  o: number;
-  v: number;
-  li: number;
-  sc: number; // 1分間スピーチ（途中から追加された科目。過去データには存在しない）
-  rp: number; // リピーティング（さらに後から追加された科目。過去データには存在しない）
-  unknown: UnknownEntry[]; // 既知科目に当てはまらなかった行（新科目追加の見落とし検知用）
+  // ── 固定科目（SUBJECTS と1対1対応。キー名はKV・シード・フロントで共有） ──
+  s: number;  // シャドーイング
+  sp: number; // 速読
+  o: number;  // 口頭英作文（Day130から「瞬間英作文」）
+  v: number;  // 単語
+  li: number; // 多聴
+  sc: number; // 1分間スピーチ（Day57から）
+  rp: number; // リピーティング（Day71から）
+  oe: number; // オンライン英会話（Day149から）
+  // ── 自動検出科目 ──
+  // 固定科目のどれにも当てはまらなかった「科目名 N分」行を、正規化した科目名をキーに
+  // そのまま集計する。Slackに新しい科目が増えても、コードを直さなくても集計・表示に
+  // 自動で組み込まれる（/api/progrit の summary.subjects に auto:true で出てくる）。
+  x: Record<string, number>;
+  unknown?: UnknownEntry[]; // 旧形式。読み込み時に migrateLegacyDay で x / 固定科目へ移行済み
 }
 
-// 既知の科目一覧（sumMin の抽出キーワードと1対1対応）。
-// Slackに新しい科目が追加されたら、必ずここにも追記すること。
-// 追記を忘れても /api/progrit の unknownSubjects に自動で出てくるので気付ける。
-// 「口頭英作文」はDay130から「瞬間英作文」に改名された（同一科目として o に合算）。
-const KNOWN_SUBJECTS = ['シャドーイング', '速読', '口頭英作文', '瞬間英作文', '単語', '多聴', 'スピーチ', 'リピーティング'];
+// 固定科目のキー（ProgritDay の数値プロパティ名）
+export type SubjectKey = 's' | 'sp' | 'o' | 'v' | 'li' | 'sc' | 'rp' | 'oe';
+
+export interface SubjectDef {
+  key: SubjectKey;
+  label: string;   // 表示名（フロントはこれをそのまま使う。クール別の言い換えはフロント側）
+  pattern: string; // Slack本文中の科目名パターン（正規表現ソース）。後ろに続く「N分」を拾う
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 科目レジストリ（固定科目）。新しい科目を「名前付きで」扱いたいときはここに1行足すだけ。
+//   - フロント（dashboard.js / progrit-weekly.html）は summary.subjects を見て描画するので、
+//     ここに足すだけで集計・グラフ・凡例に反映される（色はフロントの既定パレットから自動割当。
+//     好みの色にしたければフロントの SUBJECT_COLORS / CAT_META に任意で追記）。
+//   - ここに足さなくても、Slackに「科目名 N分」の行があれば自動検出科目（x）として
+//     集計・表示に組み込まれる。固定科目にする利点は、①表記ゆれ（別名・括弧書き）を
+//     pattern で吸収できる、②行の途中にあっても拾える、③キーが短く安定する、の3点。
+//   - pattern は互いに重ならないこと（重なると同じ行を二重に数える）。
+//   - 過去に別名だった科目は pattern の選択肢で吸収する（口頭英作文→瞬間英作文）。
+// ─────────────────────────────────────────────────────────────────────────
+export const SUBJECTS: SubjectDef[] = [
+  { key: 's',  label: 'シャドーイング', pattern: 'シャドーイング' },
+  { key: 'sp', label: '速読',           pattern: '速読' },
+  // Day130から「口頭英作文」→「瞬間英作文」に改名。同一科目として o に合算する。
+  { key: 'o',  label: '瞬間英作文',     pattern: '(?:口頭|瞬間)英作文' },
+  { key: 'v',  label: '単語',           pattern: '単語' },
+  { key: 'li', label: '多聴',           pattern: '多聴' },
+  // 「1分間スピーチ」等の表記ゆれを拾うため「スピーチ」で照合する。
+  // sumMin はキーワードの後ろの数字を読むので、前置きの「1分間」は誤検出しない。
+  { key: 'sc', label: '1分間スピーチ',  pattern: 'スピーチ' },
+  { key: 'rp', label: 'リピーティング', pattern: 'リピーティング' },
+  // Day149から追加。「英会話 30分」「オンライン英会話（Cambly）25分」のどちらも拾う。
+  { key: 'oe', label: 'オンライン英会話', pattern: '(?:オンライン)?英会話' },
+];
+
+// 「科目名 N分」の形をしていても学習項目ではない行。自動検出から除外する。
+// 集計行や休憩などが科目として登録されてしまったら、ここに追記する。
+const IGNORE_LABELS = /^(合計|小計|総計|計|トータル|total|目標|残り|休憩|移動|通勤)$/i;
+
+// 自動検出科目の名前として妥当な最大文字数。これより長い行は文章とみなして拾わない
+// （例:「今日は電車で単語帳を見ていたら 30分」のような一文を科目にしない）。
+const MAX_AUTO_LABEL_LEN = 20;
 
 // 学習1日目の実日付。d番号から実日付を導出する（Slackの投稿日時は
 // 後追い・まとめ投稿でずれるため、日付の基準には使わない）。
 const DOW_JP = ['日', '月', '火', '水', '木', '金', '土'];
 const BASE_UTC = Date.UTC(2026, 3, 24); // 2026-04-24 = 学習1日目
 
-function makeDay(
+export function makeDay(
   d: number, s: number, sp: number, o: number, v: number, li: number,
-  sc = 0, rp = 0, unknown: UnknownEntry[] = [],
+  sc = 0, rp = 0, oe = 0, x: Record<string, number> = {},
 ): ProgritDay {
   const dt = new Date(BASE_UTC + (d - 1) * 86400000);
   const dowIdx = dt.getUTCDay();
@@ -73,7 +119,7 @@ function makeDay(
     date: `${dt.getUTCMonth() + 1}/${dt.getUTCDate()}`,
     dow: DOW_JP[dowIdx],
     dowIdx,
-    s, sp, o, v, li, sc, rp, unknown,
+    s, sp, o, v, li, sc, rp, oe, x,
   };
 }
 
@@ -123,44 +169,91 @@ export function applyLockedSeed(days: ProgritDay[]): ProgritDay[] {
 // Slackから取り込めなかった投稿の手動補完。KVにその日が無いときだけ追加する
 // （Slackに再投稿されれば、そちらが勝つ）。Slack上でメッセージを編集しても ts は
 // 変わらず差分取得（oldest=lastMsgTs）に乗らないため、編集で直した投稿はここで補う。
-const MANUAL_DAYS: SeedRow[] = [
+// Slackの投稿本文をそのまま書く（通常のパーサーで解釈するので、科目が増えても
+// 書き方は変わらない）。「N日目」は通算で書く（ts を持たないためクール補正はかからない）。
+const MANUAL_POSTS: string[] = [
   // Day139(9/9): 「48日目」と誤記して投稿し、Slack上で「139日目」に編集済み。
-  // 瞬間英作文 18+28+27+25=98分、単語(日→英) 12分
-  [139, 0, 0, 98, 12, 0],
+  `プログリットで学習139日目
+瞬間英作文 18分
+瞬間英作文 28分
+瞬間英作文 27分
+瞬間英作文 25分
+単語(日→英) 12分`,
 ];
 
-export function applyManualDays(days: ProgritDay[], manual: SeedRow[] = MANUAL_DAYS): ProgritDay[] {
+export function applyManualPosts(days: ProgritDay[], posts: string[] = MANUAL_POSTS): ProgritDay[] {
   const map = new Map<number, ProgritDay>(days.map((d) => [d.d, d]));
-  for (const t of manual) if (!map.has(t[0])) map.set(t[0], makeDayFromRow(t));
+  const manual = parseProgritMessages(posts.map((text) => ({ text, ts: '0' })));
+  for (const d of manual) if (!map.has(d.d)) map.set(d.d, d);
   return Array.from(map.values()).sort((a, b) => a.d - b.d);
 }
 
-// ブロック内の「科目名 N分」形式の行のうち、既知科目に一致しないものを拾う。
-// 「1分間スピーチ」のように科目名自体に数字を含むケースは行末の数値だけを
-// 実測値として扱うため誤検知しない。新科目が追加されたときの取りこぼし検知に使う。
-function findUnknownEntries(block: string, knownSubjects: string[]): UnknownEntry[] {
-  const knownRe = new RegExp(knownSubjects.join('|'));
-  const result: UnknownEntry[] = [];
+// 科目名の正規化。行頭の箇条書き記号、括弧書き（教材名など）、末尾の区切り記号を落とす。
+//   「・オンライン英会話（Cambly）：」→「オンライン英会話」
+export function normalizeLabel(raw: string): string {
+  return raw
+    .replace(/[（(][^（）()]*[）)]/g, '')          // 括弧書きを除去
+    .replace(/^[\s　・\-–—•*●○◎■□▪☆★]+/, '')      // 行頭の箇条書き記号
+    .replace(/[\s　:：・\-–—=＝]+$/, '')            // 末尾の区切り記号
+    .replace(/[\s　]+/g, ' ')
+    .trim();
+}
+
+// 固定科目のいずれかに該当する科目名か（該当すればそのキー）。
+export function matchSubjectKey(label: string): SubjectKey | null {
+  for (const s of SUBJECTS) if (new RegExp(s.pattern).test(label)) return s.key;
+  return null;
+}
+
+// 固定科目のどれにも当てはまらない「科目名 N分」行を、科目名ごとに合算して返す。
+// 固定科目の文字を含む行は sumMin 側で数えるので、ここでは行ごと読み飛ばす
+// （「シャドーイング 30分」に加えて「シャドーイング」を科目登録してしまわないため）。
+const KNOWN_RE = new RegExp(SUBJECTS.map((s) => s.pattern).join('|'));
+// 行全体が「科目名 N分（補足）」の形。科目名に「分」を含めないことで、1行に複数科目が
+// 並ぶケース（下の INLINE_ENTRY_RE で分解する）を1つの科目として誤認しない。
+const LINE_ENTRY_RE = /^[\s　]*([^分]+?)[\s　:：]*(\d+)\s*分間?(?:[\s　]*[（(][^（）()]*[）)])?[\s　]*$/;
+const INLINE_ENTRY_RE = /([^\d分\n]+?)[\s　:：]*(\d+)\s*分間?/g;
+
+export function findExtraEntries(block: string): Record<string, number> {
+  const result: Record<string, number> = {};
+  const add = (rawLabel: string, min: number) => {
+    const label = normalizeLabel(rawLabel);
+    if (!label || label.length > MAX_AUTO_LABEL_LEN) return;
+    if (IGNORE_LABELS.test(label)) return;
+    if (!(min > 0)) return;
+    result[label] = (result[label] ?? 0) + min;
+  };
   for (const rawLine of block.split('\n')) {
-    const m = rawLine.match(/^[\s　]*(.+?)[\s　]*(\d+)\s*分\s*$/);
-    if (!m) continue;
-    const label = m[1].trim();
-    if (!label || knownRe.test(label)) continue;
-    result.push({ label, min: parseInt(m[2], 10) });
+    if (!rawLine.includes('分') || KNOWN_RE.test(rawLine)) continue;
+    const m = rawLine.match(LINE_ENTRY_RE);
+    if (m) {
+      add(m[1], parseInt(m[2], 10));
+      continue;
+    }
+    // 1行に複数の科目が並ぶ場合（「英語日記 15分 音読 10分」）
+    for (const im of rawLine.matchAll(INLINE_ENTRY_RE)) add(im[1], parseInt(im[2], 10));
   }
   return result;
 }
 
-export function parseProgritMessages(messages: SlackMessage[]): ProgritDay[] {
-  // 指定科目の「○分」を全て合計する。1日に同じ科目を複数回書いても取りこぼさない。
-  const sumMin = (text: string, subject: string): number => {
-    const re = new RegExp(subject + '[^0-9]*?(\\d+)\\s*分', 'g');
-    let total = 0;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(text)) !== null) total += parseInt(m[1], 10);
-    return total;
-  };
+// 指定科目の「○分」を全て合計する。1日に同じ科目を複数回書いても取りこぼさない。
+function sumMin(text: string, pattern: string): number {
+  const re = new RegExp('(?:' + pattern + ')[^0-9]*?(\\d+)\\s*分', 'g');
+  let total = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) total += parseInt(m[1], 10);
+  return total;
+}
 
+// 1日分のブロック（「N日目」ヘッダ以降の本文）を ProgritDay にする。
+export function parseDayBlock(day: number, block: string): ProgritDay {
+  const dayRec = makeDay(day, 0, 0, 0, 0, 0);
+  for (const s of SUBJECTS) dayRec[s.key] = sumMin(block, s.pattern);
+  dayRec.x = findExtraEntries(block);
+  return dayRec;
+}
+
+export function parseProgritMessages(messages: SlackMessage[]): ProgritDay[] {
   const headerRe = /プログリットで学習\s*(\d+)\s*日目/g;
   const dayMap = new Map<number, ProgritDay>();
 
@@ -182,65 +275,102 @@ export function parseProgritMessages(messages: SlackMessage[]): ProgritDay[] {
       const end = i + 1 < heads.length ? (heads[i + 1].index ?? text.length) : text.length;
       const block = text.slice(start, end);
 
-      const s  = sumMin(block, 'シャドーイング');
-      const sp = sumMin(block, '速読');
-      // Day130から「口頭英作文」→「瞬間英作文」に改名。同一科目なので合算する。
-      const o  = sumMin(block, '口頭英作文') + sumMin(block, '瞬間英作文');
-      const v  = sumMin(block, '単語');
-      const li = sumMin(block, '多聴');
-      // 「1分間スピーチ」等の表記ゆれを拾うため「スピーチ」で照合する。
-      // sumMin はキーワードの後ろの数字を読むので、前置きの「1分間」は誤検出しない。
-      const sc = sumMin(block, 'スピーチ');
-      const rp = sumMin(block, 'リピーティング');
-      const unknown = findUnknownEntries(block, KNOWN_SUBJECTS);
-
       // 同じ日番号の再投稿は最新を優先（上書き）
-      dayMap.set(day, makeDay(day, s, sp, o, v, li, sc, rp, unknown));
+      dayMap.set(day, parseDayBlock(day, block));
     }
   }
 
   return Array.from(dayMap.values()).sort((a, b) => a.d - b.d);
 }
 
-// Day130の改名（口頭英作文→瞬間英作文）にパーサーが追従する前にSlackから取り込まれ、
-// unknown としてKVに保存済みの分を o に付け替える。Slackの90日保持で元メッセージが
-// 消えていても直せるよう、再取得ではなく保存データ側を補正する。補正済みならno-op。
-function migrateRenamedSubjects(days: ProgritDay[]): void {
-  for (const d of days) {
-    if (!d.unknown || d.unknown.length === 0) continue;
-    d.unknown = d.unknown.filter((u) => {
-      if (!u.label.includes('瞬間英作文')) return true;
-      d.o += u.min;
-      return false;
-    });
+// KVに保存済みの旧形式レコードを現行形式に揃える（冪等）。
+//   - 固定科目のキーが無ければ 0、x が無ければ {} を補う（科目追加前に保存された日）
+//   - 旧パーサーが unknown に退避していた行は、いまの固定科目に該当すればそこへ、
+//     しなければ x（自動検出科目）へ付け替える。Slackの90日保持で元メッセージが
+//     消えていても直せるよう、再取得ではなく保存データ側を補正する。
+export function migrateLegacyDay(d: ProgritDay): ProgritDay {
+  for (const s of SUBJECTS) if (typeof d[s.key] !== 'number') d[s.key] = 0;
+  if (!d.x || typeof d.x !== 'object') d.x = {};
+  if (d.unknown && d.unknown.length > 0) {
+    for (const u of d.unknown) {
+      const key = matchSubjectKey(u.label);
+      if (key) {
+        d[key] += u.min;
+      } else {
+        const label = normalizeLabel(u.label);
+        if (label && !IGNORE_LABELS.test(label)) d.x[label] = (d.x[label] ?? 0) + u.min;
+      }
+    }
   }
+  delete d.unknown;
+  return d;
 }
 
-// 全期間の合計・未知科目サマリをサーバー側で一度だけ計算する。
-// フロント側（progrit.html / progrit-weekly.html）は必ずこの値を表示に使い、
-// 各ページで独自に合計を再計算しない。二重計算をやめることで「ページ間で
-// 合計が食い違う」再発を構造的に防ぐ。
-function summarize(days: ProgritDay[]) {
-  const dayTotal = (d: ProgritDay) =>
-    d.s + d.sp + d.o + d.v + d.li + (d.sc || 0) + (d.rp || 0) +
-    (d.unknown || []).reduce((a, u) => a + u.min, 0);
+export interface SubjectStat {
+  key: string;      // 固定科目: SubjectKey ／ 自動検出科目: 'x:' + 科目名
+  label: string;    // 表示名
+  auto: boolean;    // true = 自動検出科目（day.x[label] に分数が入っている）
+  totalMin: number;
+  activeDays: number;       // その科目を1分以上やった日数
+  firstDay: number | null;  // 最初にやった日（通算Day）
+  lastDay: number | null;
+}
 
+export function minutesOf(d: ProgritDay, s: Pick<SubjectStat, 'key' | 'label' | 'auto'>): number {
+  return s.auto ? (d.x?.[s.label] ?? 0) : ((d as unknown as Record<string, number>)[s.key] ?? 0);
+}
+
+export function dayTotal(d: ProgritDay): number {
+  let t = 0;
+  for (const s of SUBJECTS) t += d[s.key] ?? 0;
+  for (const v of Object.values(d.x ?? {})) t += v;
+  return t;
+}
+
+// 直近この日数以内に初めて登場した科目を「新しく加わった科目」として summary.newSubjects に出す。
+// フロントはこれをお知らせバナーに表示する（自動検出の誤検出に気付けるようにするため）。
+const NEW_SUBJECT_WINDOW_DAYS = 14;
+
+// 全期間の合計・科目一覧をサーバー側で一度だけ計算する。
+// フロント側（dashboard.js / progrit-weekly.html）は必ずこの値を表示に使い、
+// 各ページで科目のリストや合計を決め打ちしない。二重定義をやめることで
+// 「新科目が片方のページだけ抜けている」「ページ間で合計が食い違う」再発を構造的に防ぐ。
+export function summarize(days: ProgritDay[]) {
   const totals = days.map(dayTotal);
   const totalMinutes = totals.reduce((a, b) => a + b, 0);
   const activeDays = totals.filter((t) => t > 0).length;
 
-  const unknownAgg = new Map<string, { totalMin: number; days: number[] }>();
+  // 固定科目は定義順、自動検出科目は初登場日順
+  const defs: Array<Pick<SubjectStat, 'key' | 'label' | 'auto'>> = SUBJECTS.map((s) => ({ key: s.key, label: s.label, auto: false }));
+  const autoLabels = new Map<string, number>(); // label -> firstDay
   for (const d of days) {
-    for (const u of d.unknown || []) {
-      const cur = unknownAgg.get(u.label) ?? { totalMin: 0, days: [] };
-      cur.totalMin += u.min;
-      cur.days.push(d.d);
-      unknownAgg.set(u.label, cur);
+    for (const [label, min] of Object.entries(d.x ?? {})) {
+      if (min > 0 && !autoLabels.has(label)) autoLabels.set(label, d.d);
     }
   }
-  const unknownSubjects = Array.from(unknownAgg, ([label, v]) => ({ label, ...v }));
+  for (const [label] of Array.from(autoLabels).sort((a, b) => a[1] - b[1])) {
+    defs.push({ key: 'x:' + label, label, auto: true });
+  }
 
-  return { totalDays: days.length, activeDays, totalMinutes, unknownSubjects };
+  const subjects: SubjectStat[] = defs.map((def) => {
+    let totalMin = 0, active = 0, firstDay: number | null = null, lastDay: number | null = null;
+    for (const d of days) {
+      const m = minutesOf(d, def);
+      if (m <= 0) continue;
+      totalMin += m;
+      active++;
+      if (firstDay === null) firstDay = d.d;
+      lastDay = d.d;
+    }
+    return { ...def, totalMin, activeDays: active, firstDay, lastDay };
+  });
+
+  const maxDay = days.length ? days[days.length - 1].d : 0;
+  const newSubjects = subjects.filter(
+    (s) => s.firstDay !== null && s.firstDay > maxDay - NEW_SUBJECT_WINDOW_DAYS,
+  );
+
+  return { totalDays: days.length, activeDays, totalMinutes, subjects, newSubjects };
 }
 
 // 各クールの集計もsummarize()を再利用して計算する。フロント側（クール別タブ）は
@@ -254,7 +384,7 @@ function buildCycles(days: ProgritDay[]) {
   ];
 }
 
-function buildPayload(fetchedAt: number, days: ProgritDay[]) {
+export function buildPayload(fetchedAt: number, days: ProgritDay[]) {
   return { fetchedAt, days, summary: summarize(days), cycles: buildCycles(days) };
 }
 
@@ -304,11 +434,11 @@ export default {
     master.days = applyLockedSeed(master.days);
 
     // Slackから取り込めなかった投稿（編集で直した投稿など）を補完する。既にあればno-op。
-    master.days = applyManualDays(master.days);
+    master.days = applyManualPosts(master.days);
 
-    // 改名前パーサーで unknown 扱いのままKVに残っている分を補正する（冪等）。
+    // 科目追加前・旧パーサー時代に保存されたレコードを現行形式に揃える（冪等）。
     // 次のSlack差分取得（X-Cache: MISS）のタイミングで補正後の状態が永続化される。
-    migrateRenamedSubjects(master.days);
+    master.days.forEach(migrateLegacyDay);
 
     // 30分以内に更新済みならキャッシュ返却
     if (Date.now() - master.savedAt < REFRESH_MS && master.days.length > 0) {

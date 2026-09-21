@@ -12,14 +12,7 @@
   :root{
     --bg:#f5f6f8;--card:#ffffff;--border:#e7e9ee;--text:#2b2f36;--muted:#9aa0ab;
     --accent:#e5a93d;
-    /* 5カテゴリー */
-    --c-vocab:#e08389;   /* 単語 */
-    --c-percep:#5b9bd5;  /* 音声知覚 */
-    --c-mean:#3fa897;    /* 意味理解 */
-    --c-concept:#9ccb6b; /* 概念化 */
-    --c-sent:#f0986c;    /* 文章化 */
-    --c-speech:#c9a4e0;  /* 1分間スピーチ */
-    --c-repeat:#8bc34a;  /* リピーティング */
+    /* 科目ごとの色は下の CAT_META（JS）で持つ */
   }
   body{background:var(--bg);color:var(--text);font-family:'Noto Sans JP',sans-serif;min-height:100vh;padding:18px 16px 40px}
   .wrap{max-width:980px;margin:0 auto}
@@ -54,9 +47,11 @@
   .error-txt{color:#d9534f;font-size:.9rem;text-align:center}
   #main{display:none}
 
-  /* 未知科目・不整合の警告バナー */
+  /* 不整合の警告バナー／新しい科目のお知らせバナー */
   .warn-banner{display:none;background:#fff3cd;border:1px solid #e5a93d;border-radius:10px;padding:12px 16px;margin-bottom:16px;font-size:.82rem;line-height:1.6;color:#6b4f0f}
   .warn-banner strong{color:#a3720a}
+  .info-banner{display:none;background:#eaf3fc;border:1px solid #5b9bd5;border-radius:10px;padding:12px 16px;margin-bottom:16px;font-size:.82rem;line-height:1.6;color:#1f3b5c}
+  .info-banner strong{color:#2f6fb0}
 </style>
 </head>
 <body>
@@ -79,13 +74,14 @@
     </div>
 
     <div class="warn-banner" id="warnBanner"></div>
+    <div class="info-banner" id="infoBanner"></div>
 
     <div class="sec-h">学習状況<span class="range" id="rangeLbl"></span></div>
     <div class="card">
       <div class="kpis" id="kpis"></div>
       <div class="chart-wrap"><canvas id="chart"></canvas></div>
     </div>
-    <div style="text-align:center;color:var(--muted);font-size:.7rem;margin-top:14px">v2026.08.01b（未知科目検知・合計統一）</div>
+    <div style="text-align:center;color:var(--muted);font-size:.7rem;margin-top:14px">v2026.09.21（科目の自動組み込み）</div>
   </div>
 </div>
 
@@ -98,19 +94,41 @@ const GOAL_H = 2.5;              // 1日の目標学習時間
 const GOAL_MIN = GOAL_H * 60;    // = 150分
 const PROGRAM_WEEKS = 12;        // プログラム全期間（週次タブはこの週数まで表示）
 const DOW = ['日','月','火','水','木','金','土'];
-const CAT = [
-  { key:'v',  name:'単語',     css:'--c-vocab' },
-  { key:'s',  name:'音声知覚', css:'--c-percep' },
-  { key:'sp', name:'意味理解', css:'--c-mean' },
-  { key:'li', name:'概念化',   css:'--c-concept' },
-  { key:'o',  name:'文章化',   css:'--c-sent' },
-  { key:'sc', name:'スピーチ', css:'--c-speech' },
-  { key:'rp', name:'リピーティング', css:'--c-repeat' },
-];
+
+// 科目の一覧は Worker 側（summary.subjects）が単一の情報源。ここでは決め打ちせず、
+// 固定科目の「PROGRIT流の呼び名・色・並び順」だけを持つ。ここに無い科目
+// （Slackで新しく始めた科目＝自動検出科目や、Worker側に追加しただけの固定科目）は
+// サーバーの表示名と既定パレットの色で、末尾に自動で並ぶ。
+const CAT_META = {
+  v:  { name:'単語',       color:'#e08389', order:0 },
+  s:  { name:'音声知覚',   color:'#5b9bd5', order:1 },
+  sp: { name:'意味理解',   color:'#3fa897', order:2 },
+  li: { name:'概念化',     color:'#9ccb6b', order:3 },
+  o:  { name:'文章化',     color:'#f0986c', order:4 },
+  sc: { name:'スピーチ',   color:'#c9a4e0', order:5 },
+  rp: { name:'リピーティング', color:'#8bc34a', order:6 },
+  oe: { name:'オンライン英会話', color:'#5c6bc0', order:7 },
+};
+const FALLBACK_COLORS = ['#f5b041','#48c9b0','#af7ac5','#5dade2','#ec7063','#a3b86c','#85929e','#f7dc6f'];
+function buildCats(summary){
+  if(!summary || !Array.isArray(summary.subjects)) throw new Error('Worker が古いバージョンです（summary.subjects がありません）');
+  let fb = 0;
+  return summary.subjects.map((s, i) => {
+    const meta = CAT_META[s.key] || {};
+    const min = s.auto ? (r => (r.x && r.x[s.label]) || 0) : (r => r[s.key] || 0);
+    return {
+      key:s.key, name: meta.name || s.label, color: meta.color || FALLBACK_COLORS[fb++ % FALLBACK_COLORS.length],
+      order: meta.order != null ? meta.order : 100 + i, total: s.totalMin || 0, min,
+    };
+  }).sort((a,b) => a.order - b.order);
+}
 function cssvar(v){ return getComputedStyle(document.documentElement).getPropertyValue(v).trim(); }
+function esc(s){ return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
 
 let RAW = [];          // worker days
-let SUMMARY = null;    // Worker側で計算した全期間サマリ（合計はここを正とする）
+let SUMMARY = null;    // Worker側で計算した全期間サマリ（合計・科目一覧はここを正とする）
+let CAT = [];          // 描画する科目（buildCats の結果。合計が0の科目は含めない）
+let CAT_ALL = [];      // 全科目（合計の再計算用）
 let byDay = new Map(); // d -> record
 let dataWeeks = 1;     // 実績のある週数（日次タブのナビ上限・初期表示）
 let numWeeks = PROGRAM_WEEKS; // 週次タブで表示する週数（プログラム全期間）
@@ -121,22 +139,32 @@ let chart = null;
 function renderWarnBanner(){
   const banner = document.getElementById('warnBanner');
   const lines = [];
-  if (SUMMARY && SUMMARY.unknownSubjects && SUMMARY.unknownSubjects.length > 0) {
-    SUMMARY.unknownSubjects.forEach(u => {
-      lines.push(`未対応の学習項目「${u.label}」を検出：合計${u.totalMin}分（${u.days.map(d=>'Day'+d).join(', ')}）。集計から漏れています。パーサーへの追加が必要です。`);
-    });
-  }
-  if (SUMMARY) {
-    const localTotal = RAW.reduce((a,r) => a + tot(r), 0);
-    if (Math.abs(SUMMARY.totalMinutes - localTotal) > 0) {
-      lines.push(`サーバー側の合計（${SUMMARY.totalMinutes}分）とこのページの再計算結果（${localTotal}分）が一致しません。表示ロジックにバグの可能性があります。`);
-    }
+  // サーバー側合計とこのページの再計算結果の突き合わせ（表示ロジックの自己チェック）
+  const localTotal = RAW.reduce((a,r) => a + tot(r), 0);
+  if (Math.abs(SUMMARY.totalMinutes - localTotal) > 0) {
+    lines.push(`サーバー側の合計（${SUMMARY.totalMinutes}分）とこのページの再計算結果（${localTotal}分）が一致しません。表示ロジックにバグの可能性があります。`);
   }
   if (lines.length > 0) {
     banner.style.display = 'block';
     banner.innerHTML = '<strong>⚠ 要確認</strong><br>' + lines.join('<br>');
   } else {
     banner.style.display = 'none';
+  }
+
+  // 新しく加わった科目のお知らせ（自動で集計に組み込み済み）。自動検出は「科目名 N分」の
+  // 行をそのまま科目にするため、誤検出に気付けるよう直近2週間以内に初登場した科目を出す。
+  const info = document.getElementById('infoBanner');
+  const infoLines = (SUMMARY.newSubjects || []).map(ns => {
+    const c = CAT_ALL.find(x => x.key === ns.key);
+    const name = c ? c.name : ns.label;
+    return `新しい学習項目「${esc(name)}」を集計に組み込みました（Day${ns.firstDay}〜、合計${ns.totalMin}分）。` +
+      (ns.auto ? '科目名は投稿の表記をそのまま使っています。' : '');
+  });
+  if (infoLines.length > 0) {
+    info.style.display = 'block';
+    info.innerHTML = '<strong>🆕 新しい科目</strong><br>' + infoLines.join('<br>');
+  } else {
+    info.style.display = 'none';
   }
 }
 
@@ -148,6 +176,8 @@ async function init(){
     if(!data.days || !data.days.length) throw new Error('データなし');
     RAW = data.days;
     SUMMARY = data.summary || null;
+    CAT_ALL = buildCats(SUMMARY);
+    CAT = CAT_ALL.filter(c => c.total > 0);
     byDay = new Map(RAW.map(r => [r.d, r]));
     const maxD = Math.max(...RAW.map(r => r.d));
     dataWeeks = Math.max(1, Math.ceil(maxD / 7));
@@ -178,8 +208,9 @@ function syncTabs(){
   document.getElementById('tabWeekly').classList.toggle('on', mode==='weekly');
 }
 
-// sc（スピーチ）は途中から追加された科目のため、古いレコードには存在しない → ||0 で吸収
-const tot = r => r ? (r.s+r.sp+r.o+r.v+r.li+(r.sc||0)+(r.rp||0)) : 0;
+// 1日の合計 = 全科目の分数の和（科目一覧は Worker 側が正。途中から追加された科目は
+// 古いレコードに存在しないので、各科目の min() が ||0 で吸収する）
+const tot = r => r ? CAT_ALL.reduce((a,c) => a + c.min(r), 0) : 0;
 // 学習1日目=2026/4/24 からd番号の実日付を求める
 const BASE = Date.UTC(2026,3,24);
 function dateOf(d){ return new Date(BASE + (d-1)*86400000); }
@@ -224,8 +255,8 @@ function renderDaily(){
 
   const catDatasets = CAT.map(c => ({
     label:c.name, stack:'actual',
-    data: days.map(x => x.r ? +( (x.r[c.key]||0)/60 ).toFixed(2) : 0),
-    backgroundColor: cssvar(c.css), borderWidth:0, borderRadius:2,
+    data: days.map(x => x.r ? +( c.min(x.r)/60 ).toFixed(2) : 0),
+    backgroundColor: c.color, borderWidth:0, borderRadius:2,
   }));
   const targetDataset = {
     label:'目標(2.5h)', stack:'target',
@@ -251,7 +282,7 @@ function renderWeekly(){
     CAT.forEach(c=>cats[c.key].push(0));
     for(let i=0;i<7;i++){
       const r=byDay.get(startD+i);
-      if(r){ wMin+=tot(r); CAT.forEach((c,ci)=>{ cats[c.key][w-1]+= (r[c.key]||0)/60; }); }
+      if(r){ wMin+=tot(r); CAT.forEach(c=>{ cats[c.key][w-1]+= c.min(r)/60; }); }
     }
     // X軸ラベルは2段表示（"Week N" ＋ 日付レンジ）
     const ws=dateOf(startD), we=dateOf(startD+6);
@@ -282,7 +313,7 @@ function renderWeekly(){
 
   const catDatasets = CAT.map(c => ({
     label:c.name, stack:'actual', data:cats[c.key],
-    backgroundColor:cssvar(c.css), borderWidth:0, borderRadius:2,
+    backgroundColor:c.color, borderWidth:0, borderRadius:2,
   }));
   const targetDataset = {
     label:'目標', stack:'target', data:labels.map(()=>GOAL_H*7),
