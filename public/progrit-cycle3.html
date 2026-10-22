@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>第三クール実績</title>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@300;400;500;700&display=swap" rel="stylesheet">
+<script src="auth.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+  *{margin:0;padding:0;box-sizing:border-box}
+  :root{
+    --bg:#0d1117;--card:#161b22;--card2:#1c2128;--border:#30363d;
+    --text:#e6edf3;--muted:#8b949e;--accent:#58a6ff;
+  }
+  body{background:var(--bg);color:var(--text);font-family:'Noto Sans JP',sans-serif;min-height:100vh;padding:20px}
+  h1{text-align:center;font-size:1.6rem;font-weight:700;margin-bottom:4px;background:linear-gradient(90deg,#58a6ff,#a5d6ff);-webkit-background-clip:text;-webkit-text-fill-color:transparent}
+  .subtitle{text-align:center;color:var(--muted);font-size:.85rem;margin-bottom:28px}
+  .badge{display:inline-block;background:#1c2128;border:1px solid #30363d;border-radius:20px;padding:2px 12px;font-size:.75rem;color:#58a6ff;margin:0 4px}
+
+  /* loading */
+  #loading{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:80vh;gap:16px}
+  .spinner{width:36px;height:36px;border:3px solid #30363d;border-top-color:#58a6ff;border-radius:50%;animation:spin .8s linear infinite}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .load-txt{color:var(--muted);font-size:.85rem}
+  .error-txt{color:#f85149;font-size:.9rem}
+  #main{display:none}
+
+  /* KPI */
+  .kpi-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:14px;margin-bottom:28px}
+  .kpi{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:18px 16px;text-align:center}
+  .kpi .val{font-size:2rem;font-weight:700;line-height:1.1}
+  .kpi .lbl{font-size:.72rem;color:var(--muted);margin-top:4px}
+  .kpi .sub{font-size:.7rem;color:#58a6ff;margin-top:2px}
+  .kpi.hl{border-color:#58a6ff33;background:linear-gradient(135deg,#161b22,#1c2128)}
+
+  /* Grid layouts */
+  .row2{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px}
+  .row3{display:grid;grid-template-columns:2fr 1fr;gap:16px;margin-bottom:16px}
+  @media(max-width:900px){.row2,.row3{grid-template-columns:1fr}}
+
+  /* Cards */
+  .card{background:var(--card);border:1px solid var(--border);border-radius:12px;padding:20px}
+  .card h3{font-size:.9rem;font-weight:500;color:var(--muted);margin-bottom:14px;letter-spacing:.5px}
+  .chart-wrap{position:relative}
+  .chart-wrap canvas{max-height:280px}
+  .chart-tall canvas{max-height:340px}
+  .chart-sm canvas{max-height:220px}
+
+  /* Subject legend */
+  .legend{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}
+  .leg-item{display:flex;align-items:center;gap:5px;font-size:.75rem}
+  .leg-dot{width:10px;height:10px;border-radius:50%}
+
+  /* Subject totals */
+  .subj-list{display:flex;flex-direction:column;gap:10px}
+  .subj-row{display:flex;align-items:center;gap:10px}
+  .subj-name{font-size:.8rem;width:90px;flex-shrink:0}
+  .bar-wrap{flex:1;height:8px;background:#30363d;border-radius:4px;overflow:hidden}
+  .bar-fill{height:100%;border-radius:4px;transition:width .3s}
+  .subj-mins{font-size:.75rem;color:var(--muted);width:55px;text-align:right}
+
+  /* DOW table */
+  .dow-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:8px}
+  .dow-cell{background:var(--card2);border-radius:8px;padding:10px 6px;text-align:center}
+  .dow-cell .day{font-size:.7rem;color:var(--muted)}
+  .dow-cell .avg{font-size:1.1rem;font-weight:700}
+  .dow-cell .n{font-size:.65rem;color:var(--muted)}
+  .dow-cell.hi{border:1px solid #58a6ff55;background:linear-gradient(135deg,#1c2128,#16213e)}
+
+  /* Insights */
+  .insight-list{display:flex;flex-direction:column;gap:10px}
+  .insight{background:var(--card2);border-left:3px solid #58a6ff;border-radius:0 8px 8px 0;padding:10px 14px}
+  .insight.warn{border-color:#FFB74D}
+  .insight.good{border-color:#81C784}
+  .insight .icon{font-size:1rem;margin-right:6px}
+  .insight .txt{font-size:.82rem;line-height:1.6}
+  .insight .txt strong{color:var(--text)}
+
+  /* 不整合の警告バナー／新しい科目のお知らせバナー */
+  .warn-banner{display:none;background:#3d2b0a;border:1px solid #FFB74D;border-radius:10px;padding:12px 16px;margin-bottom:16px;font-size:.82rem;line-height:1.6;color:#ffe0b2}
+  .warn-banner strong{color:#FFB74D}
+  .info-banner{display:none;background:#0f2a3d;border:1px solid #58a6ff;border-radius:10px;padding:12px 16px;margin-bottom:16px;font-size:.82rem;line-height:1.6;color:#cfe6ff}
+  .info-banner strong{color:#58a6ff}
+
+  footer{text-align:center;color:#484f58;font-size:.72rem;margin-top:28px;padding-top:16px;border-top:1px solid var(--border)}
+</style>
+</head>
+<body>
+
+<div id="loading">
+  <div class="spinner"></div>
+  <div class="load-txt">Slackから学習データを取得中…</div>
+</div>
+
+<div id="main">
+  <h1 id="pageTitle">🎓 第三クール実績</h1>
+  <div class="subtitle" id="subtitle"></div>
+
+  <div class="warn-banner" id="warnBanner"></div>
+  <div class="info-banner" id="infoBanner"></div>
+
+  <div class="kpi-grid" id="kpiGrid"></div>
+
+  <div class="row3">
+    <div class="card chart-tall">
+      <h3>📅 日別学習時間（分）</h3>
+      <div class="chart-wrap" style="height:320px"><canvas id="dailyChart"></canvas></div>
+    </div>
+    <div class="card">
+      <h3>📊 科目別内訳</h3>
+      <div class="chart-wrap" style="height:200px;display:flex;align-items:center;justify-content:center">
+        <canvas id="donutChart"></canvas>
+      </div>
+      <div class="subj-list" style="margin-top:16px" id="subjList"></div>
+    </div>
+  </div>
+
+  <div class="row2">
+    <div class="card">
+      <h3>📚 科目別積み上げ（日別）</h3>
+      <!-- 凡例は dashboard.js が summary.subjects から生成する（科目を決め打ちしない） -->
+      <div class="legend" id="stackLegend"></div>
+      <div class="chart-wrap" style="height:260px"><canvas id="stackedChart"></canvas></div>
+    </div>
+    <div class="card">
+      <h3>📆 曜日別平均（分）</h3>
+      <div class="dow-grid" style="margin-bottom:16px" id="dowGrid"></div>
+      <div class="chart-wrap" style="height:170px"><canvas id="dowChart"></canvas></div>
+    </div>
+  </div>
+
+  <div class="card" style="margin-bottom:16px">
+    <h3>🔄 科目別トレンド（7日移動平均）</h3>
+    <div class="chart-wrap" style="height:220px"><canvas id="trendChart"></canvas></div>
+  </div>
+
+  <div class="card" style="margin-bottom:16px">
+    <h3>💡 インサイトと提言</h3>
+    <div class="insight-list" id="insightList"></div>
+  </div>
+
+  <footer id="footer"></footer>
+</div>
+
+<script>
+const DASHBOARD_CONFIG = { title: '第三クール実績', cycleKey: 'cycle3' };
+</script>
+<script src="dashboard.js"></script>
+</body>
+</html>

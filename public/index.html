@@ -27,6 +27,7 @@
       <button class="lx-dash-tab" id="tab-detail">詳細</button>
       <button class="lx-dash-tab" id="tab-cycle1">第一クール</button>
       <button class="lx-dash-tab" id="tab-cycle2">第二クール</button>
+      <button class="lx-dash-tab" id="tab-cycle3">第三クール</button>
     </div>
   </div>
   <iframe class="lx-dash-frame" id="frame" src="/progrit-weekly.html" title="学習記録ダッシュボード"></iframe>
@@ -37,6 +38,7 @@
     detail: { src: '/progrit.html', btn: document.getElementById('tab-detail') },
     cycle1: { src: '/progrit-cycle1.html', btn: document.getElementById('tab-cycle1') },
     cycle2: { src: '/progrit-cycle2.html', btn: document.getElementById('tab-cycle2') },
+    cycle3: { src: '/progrit-cycle3.html', btn: document.getElementById('tab-cycle3') },
   };
   const frame = document.getElementById('frame');
   function setTab(key) {
