@@ -151,8 +151,12 @@ export const CYCLES: CycleDef[] = [
 ];
 
 // 第一クールの終端。Day1〜ここまではシード(progrit-seed.ts)が正本で、Slackの差分取得で
-// 上書きしない（applyLockedSeed / fetch 内の条件）。第二クール以降のロックはしていない。
+// 上書きしない（applyLockedSeed / mergeFetchedDays）。
 const CYCLE_BOUNDARY_DAY = CYCLES[0].toDay!;
+// 終了したクールの終端（現在は第二クール末 = Day182）。第一クール末より後〜ここまでの日は
+// KV に保存済みの値を正本とし、Slack の差分取得では「まだ無い日を埋める」だけで既存の値を
+// 上書きしない（誤った日番号の投稿で確定済みの数字が消えるのを防ぐ）。
+export const LOCKED_THROUGH_DAY = Math.max(...CYCLES.filter((c) => c.toDay !== null).map((c) => c.toDay!));
 // 各クールの開始Day（通算）。resolveAbsoluteDay が「N日目」の候補を作る基点。
 const CYCLE_START_DAYS = CYCLES.map((c) => c.fromDay);
 
@@ -406,6 +410,21 @@ export function buildCycles(days: ProgritDay[]) {
   }));
 }
 
+// Slack から取得した日を KV の既存データにマージする。
+//   - Day1〜91（第一クール）: シードが正本。Slack の内容では一切更新しない。
+//   - Day92〜LOCKED_THROUGH_DAY（終了済みクール）: 既存の値を守る。KV にまだ無い日だけ追加する
+//     （最終日の投稿が未取得のまま確定した場合も、次の取得で埋まる）。
+//   - それ以降（進行中のクール）: 同じ日番号の再投稿は新しい方で上書きする（従来どおり）。
+export function mergeFetchedDays(existing: ProgritDay[], fetched: ProgritDay[]): ProgritDay[] {
+  const dayMap = new Map<number, ProgritDay>(existing.map((d) => [d.d, d]));
+  for (const d of fetched) {
+    if (d.d <= CYCLE_BOUNDARY_DAY) continue;
+    if (d.d <= LOCKED_THROUGH_DAY && dayMap.has(d.d)) continue;
+    dayMap.set(d.d, d);
+  }
+  return Array.from(dayMap.values()).sort((a, b) => a.d - b.d);
+}
+
 export function buildPayload(fetchedAt: number, days: ProgritDay[]) {
   return { fetchedAt, days, summary: summarize(days), cycles: buildCycles(days) };
 }
@@ -507,13 +526,9 @@ export default {
       } while (cursor);
 
       if (newMessages.length > 0) {
-        // 新しいメッセージを既存daysとマージ（同じ日番号は上書き）
-        const newDays = parseProgritMessages(newMessages);
-        const dayMap = new Map<number, ProgritDay>(master.days.map((d) => [d.d, d]));
-        // 第一クール(d1〜91)は終了済みの確定値（シードが正本）なので、Slack再取得で上書きしない。
-        // 誤った日番号で投稿されても第一クールの数字は動かない。
-        for (const d of newDays) if (d.d > CYCLE_BOUNDARY_DAY) dayMap.set(d.d, d);
-        master.days = Array.from(dayMap.values()).sort((a, b) => a.d - b.d);
+        // 新しいメッセージを既存daysとマージ。終了済みクール（第一・第二）は上書きしない
+        // （詳細は mergeFetchedDays）。誤った日番号で投稿されても確定済みの数字は動かない。
+        master.days = mergeFetchedDays(master.days, parseProgritMessages(newMessages));
 
         // 最新メッセージのts（Slackはtimestamp降順で返す）を記録
         const latestTs = newMessages.reduce((max, m) =>

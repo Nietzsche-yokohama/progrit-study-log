@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import {
   parseProgritMessages, findExtraEntries, normalizeLabel, migrateLegacyDay,
   summarize, dayTotal, applyManualPosts, applyLockedSeed, makeDay, SUBJECTS,
-  buildCycles, CYCLES, type ProgritDay,
+  buildCycles, CYCLES, mergeFetchedDays, LOCKED_THROUGH_DAY, type ProgritDay,
 } from './index';
 
 const post = (text: string, ts = '0') => ({ text, ts });
@@ -150,4 +150,18 @@ test('cycles は第一〜第三クールを返し、Day182 は第二クール・
   assert.equal(summarize(days).totalMinutes, cycles.reduce((a, c) => a + c.totalMinutes, 0));
   assert.deepEqual(CYCLES.map((c) => c.fromDay), [1, 92, 183]);
   assert.equal(makeDay(183, 0, 0, 0, 0, 0).date, '10/23'); // 第三クール1日目 = 2026-10-23
+});
+
+test('終了済みクール（Day1〜182）は Slack の再取得で上書きされず、未取得の日だけ埋まる', () => {
+  assert.equal(LOCKED_THROUGH_DAY, 182);
+  const existing = [makeDay(91, 1, 0, 0, 0, 0), makeDay(100, 10, 0, 0, 0, 0), makeDay(183, 30, 0, 0, 0, 0)];
+  const fetched = [
+    makeDay(91, 99, 0, 0, 0, 0),   // 第一クール: シードが正本 → 無視
+    makeDay(100, 99, 0, 0, 0, 0),  // 第二クール・既存あり → 守る
+    makeDay(182, 20, 0, 0, 0, 0),  // 第二クール・未取得 → 追加
+    makeDay(183, 40, 0, 0, 0, 0),  // 第三クール（進行中）→ 再投稿で上書き
+    makeDay(184, 50, 0, 0, 0, 0),  // 第三クール・新規 → 追加
+  ];
+  const merged = mergeFetchedDays(existing, fetched);
+  assert.deepEqual(merged.map((d) => [d.d, d.s]), [[91, 1], [100, 10], [182, 20], [183, 40], [184, 50]]);
 });
