@@ -1,7 +1,8 @@
 // 学習ダッシュボード（KPI・グラフ・インサイト）の描画ロジック。
-// progrit.html（全体）・progrit-cycle1.html（第一クール）・progrit-cycle2.html（第二クール）
-// の3ページから共有される。各HTMLは読み込み前に DASHBOARD_CONFIG を定義する:
-//   { title: 表示タイトル文字列, cycleKey: 'overall' | 'cycle1' | 'cycle2' }
+// progrit.html（全体）・progrit-cycleN.html（第一〜第三クール）から共有される。
+// 各HTMLは読み込み前に DASHBOARD_CONFIG を定義する:
+//   { title: 表示タイトル文字列, cycleKey: 'overall' | 'cycle1' | 'cycle2' | 'cycle3' }
+// cycleKey は Worker の CYCLES[].key と一致させる。
 // クールの境目（何日目まで）はWorker側(/api/progrit の cycles)が単一の情報源。
 // このファイルやHTML側に日数を決め打ちしないことで、境目のズレによる
 // 表示不一致の再発を防ぐ。
@@ -11,7 +12,7 @@
 // Slackに新しい科目が増えても、このファイルを直さなくても自動で表示に組み込まれる。
 
 const WORKER = 'https://progrit-study-log-worker.ybrnc777.workers.dev/api/progrit';
-const PAGE_VERSION = 'v2026.09.21（科目の自動組み込み）';
+const PAGE_VERSION = 'v2026.10.22（第三クール追加）';
 
 // Worker側がBearer認証必須。トークンの保存・付与・入れ直しは auth.js の
 // fetchWithToken に集約してある（各HTMLが dashboard.js より先に読み込む）。

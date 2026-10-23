@@ -127,20 +127,48 @@ function makeDayFromRow(t: SeedRow): ProgritDay {
   return makeDay(t[0], t[1], t[2], t[3], t[4], t[5], t[6] ?? 0, t[7] ?? 0);
 }
 
-// 第一クール／第二クールの境目。Slack本文でDay92が「ネクストコース1日目」と
-// 明言されているため、Day91までを第一クール、Day92以降を第二クールとして固定する。
-// 第三クールが始まったら CYCLE_START_DAYS に開始Dayを追加し、buildCycles にも定義を足すこと。
-const CYCLE_BOUNDARY_DAY = 91;
-const CYCLE_START_DAYS = [1, CYCLE_BOUNDARY_DAY + 1];
+// ─────────────────────────────────────────────────────────────────────────
+// クール定義（通算Dayの範囲）。1クール = 91日。
+//   第一クール: Day1〜91   (2026-04-24〜07-23)  終了・シードで固定
+//   第二クール: Day92〜182 (2026-07-24〜10-22)  終了（Slack本文でDay92が「ネクストコース1日目」、
+//                                               「91日目」= Day182 が最終投稿）
+//   第三クール: Day183〜   (2026-10-23〜)       進行中。Slackの「1日目」= Day183
+// 次のクールが始まったら、ここに1行足して直前のクールの toDay を埋めるだけでよい
+// （resolveAbsoluteDay の候補・/api/progrit の cycles・クール別タブの範囲は全てここから導く）。
+// フロント側は progrit-cycleN.html を1枚コピーして index.html にタブを足す。
+// ─────────────────────────────────────────────────────────────────────────
+export const CYCLE_LENGTH_DAYS = 91;
+export interface CycleDef {
+  key: string;
+  label: string;
+  fromDay: number;
+  toDay: number | null; // 進行中のクールは null
+}
+export const CYCLES: CycleDef[] = [
+  { key: 'cycle1', label: '第一クール', fromDay: 1, toDay: CYCLE_LENGTH_DAYS },
+  { key: 'cycle2', label: '第二クール', fromDay: CYCLE_LENGTH_DAYS + 1, toDay: CYCLE_LENGTH_DAYS * 2 },
+  { key: 'cycle3', label: '第三クール', fromDay: CYCLE_LENGTH_DAYS * 2 + 1, toDay: null },
+];
+
+// 第一クールの終端。Day1〜ここまではシード(progrit-seed.ts)が正本で、Slackの差分取得で
+// 上書きしない（applyLockedSeed / mergeFetchedDays）。
+const CYCLE_BOUNDARY_DAY = CYCLES[0].toDay!;
+// 終了したクールの終端（現在は第二クール末 = Day182）。第一クール末より後〜ここまでの日は
+// KV に保存済みの値を正本とし、Slack の差分取得では「まだ無い日を埋める」だけで既存の値を
+// 上書きしない（誤った日番号の投稿で確定済みの数字が消えるのを防ぐ）。
+export const LOCKED_THROUGH_DAY = Math.max(...CYCLES.filter((c) => c.toDay !== null).map((c) => c.toDay!));
+// 各クールの開始Day（通算）。resolveAbsoluteDay が「N日目」の候補を作る基点。
+const CYCLE_START_DAYS = CYCLES.map((c) => c.fromDay);
 
 // Slackの「N日目」を、第一クールから通算したDay番号に直す。
 // 第二クール以降の投稿は「そのクールのN日目」で書く運用にした（例:「50日目」= 通算Day141）。
 // 通算で書かれた投稿（「139日目」）もそのまま通す必要があるため、各クールの開始Dayを
-// 基点にした候補（N, N+91, …）のうち、投稿日時にいちばん近い実日付になるものを採る。
+// 基点にした候補（N, N+91, N+182, …）のうち、投稿日時にいちばん近い実日付になるものを採る。
 //   6/11 に投稿された「48日目」→ Day48（第一クール）
 //   9/10 に投稿された「48日目」→ Day139（第二クール48日目 = 9/9）
 //   9/10 に投稿された「139日目」→ Day139（通算表記もそのまま通る）
-// 候補同士は91日以上離れているので、数日〜数週間の後追い投稿でも取り違えない。
+//   10/23 に投稿された「1日目」→ Day183（第三クール1日目）
+// 候補同士は91日離れているので、投稿日時と実日付のずれが45日未満なら取り違えない。
 export function resolveAbsoluteDay(n: number, tsSec: number): number {
   if (!(tsSec > 0)) return n;
   const postedElapsedDays = (tsSec * 1000 - BASE_UTC) / 86400000; // 学習1日目からの経過日数
@@ -375,13 +403,26 @@ export function summarize(days: ProgritDay[]) {
 
 // 各クールの集計もsummarize()を再利用して計算する。フロント側（クール別タブ）は
 // このcyclesをそのまま表示に使い、クールの境目や合計をページ側で持たない。
-function buildCycles(days: ProgritDay[]) {
-  const cycle1Days = days.filter((d) => d.d <= CYCLE_BOUNDARY_DAY);
-  const cycle2Days = days.filter((d) => d.d > CYCLE_BOUNDARY_DAY);
-  return [
-    { key: 'cycle1', label: '第一クール', fromDay: 1, toDay: CYCLE_BOUNDARY_DAY, ...summarize(cycle1Days) },
-    { key: 'cycle2', label: '第二クール', fromDay: CYCLE_BOUNDARY_DAY + 1, toDay: null as number | null, ...summarize(cycle2Days) },
-  ];
+export function buildCycles(days: ProgritDay[]) {
+  return CYCLES.map((c) => ({
+    ...c,
+    ...summarize(days.filter((d) => d.d >= c.fromDay && (c.toDay === null || d.d <= c.toDay))),
+  }));
+}
+
+// Slack から取得した日を KV の既存データにマージする。
+//   - Day1〜91（第一クール）: シードが正本。Slack の内容では一切更新しない。
+//   - Day92〜LOCKED_THROUGH_DAY（終了済みクール）: 既存の値を守る。KV にまだ無い日だけ追加する
+//     （最終日の投稿が未取得のまま確定した場合も、次の取得で埋まる）。
+//   - それ以降（進行中のクール）: 同じ日番号の再投稿は新しい方で上書きする（従来どおり）。
+export function mergeFetchedDays(existing: ProgritDay[], fetched: ProgritDay[]): ProgritDay[] {
+  const dayMap = new Map<number, ProgritDay>(existing.map((d) => [d.d, d]));
+  for (const d of fetched) {
+    if (d.d <= CYCLE_BOUNDARY_DAY) continue;
+    if (d.d <= LOCKED_THROUGH_DAY && dayMap.has(d.d)) continue;
+    dayMap.set(d.d, d);
+  }
+  return Array.from(dayMap.values()).sort((a, b) => a.d - b.d);
 }
 
 export function buildPayload(fetchedAt: number, days: ProgritDay[]) {
@@ -485,13 +526,9 @@ export default {
       } while (cursor);
 
       if (newMessages.length > 0) {
-        // 新しいメッセージを既存daysとマージ（同じ日番号は上書き）
-        const newDays = parseProgritMessages(newMessages);
-        const dayMap = new Map<number, ProgritDay>(master.days.map((d) => [d.d, d]));
-        // 第一クール(d1〜91)は終了済みの確定値（シードが正本）なので、Slack再取得で上書きしない。
-        // 誤った日番号で投稿されても第一クールの数字は動かない。
-        for (const d of newDays) if (d.d > CYCLE_BOUNDARY_DAY) dayMap.set(d.d, d);
-        master.days = Array.from(dayMap.values()).sort((a, b) => a.d - b.d);
+        // 新しいメッセージを既存daysとマージ。終了済みクール（第一・第二）は上書きしない
+        // （詳細は mergeFetchedDays）。誤った日番号で投稿されても確定済みの数字は動かない。
+        master.days = mergeFetchedDays(master.days, parseProgritMessages(newMessages));
 
         // 最新メッセージのts（Slackはtimestamp降順で返す）を記録
         const latestTs = newMessages.reduce((max, m) =>

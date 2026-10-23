@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import {
   parseProgritMessages, findExtraEntries, normalizeLabel, migrateLegacyDay,
   summarize, dayTotal, applyManualPosts, applyLockedSeed, makeDay, SUBJECTS,
-  type ProgritDay,
+  buildCycles, CYCLES, mergeFetchedDays, LOCKED_THROUGH_DAY, type ProgritDay,
 } from './index';
 
 const post = (text: string, ts = '0') => ({ text, ts });
@@ -121,4 +121,47 @@ test('同じ日番号の再投稿は新しい方が勝つ', () => {
   ]);
   assert.equal(days.length, 1);
   assert.equal(days[0].v, 9);
+});
+
+test('第三クールの「N日目」は Day183 起点で通算Dayに直す（第二クールの後追い投稿も崩れない）', () => {
+  const ts = (m: number, d: number) => String(Date.UTC(2026, m - 1, d, 3) / 1000); // JST 12時ごろ
+  // 第二クール最終日「91日目」(10/22) → Day182
+  assert.equal(parseProgritMessages([post('プログリットで学習91日目\n単語 5分', ts(10, 22))])[0].d, 182);
+  // 第三クール「1日目」(10/23) → Day183
+  assert.equal(parseProgritMessages([post('プログリットで学習1日目\n単語 5分', ts(10, 23))])[0].d, 183);
+  // 第三クール「3日目」を数日遅れ(10/28)でまとめ投稿 → Day185
+  assert.equal(parseProgritMessages([post('プログリットで学習3日目\n単語 5分', ts(10, 28))])[0].d, 185);
+  // 第三クール開始後に第二クール「90日目」を後追い投稿(10/25) → Day181 のまま
+  assert.equal(parseProgritMessages([post('プログリットで学習90日目\n単語 5分', ts(10, 25))])[0].d, 181);
+  // 通算表記「183日目」もそのまま通る
+  assert.equal(parseProgritMessages([post('プログリットで学習183日目\n単語 5分', ts(10, 23))])[0].d, 183);
+});
+
+test('cycles は第一〜第三クールを返し、Day182 は第二クール・Day183 は第三クールに入る', () => {
+  const days = [makeDay(91, 10, 0, 0, 0, 0), makeDay(92, 20, 0, 0, 0, 0), makeDay(182, 30, 0, 0, 0, 0), makeDay(183, 40, 0, 0, 0, 0)];
+  const cycles = buildCycles(days);
+  assert.deepEqual(cycles.map((c) => [c.key, c.label, c.fromDay, c.toDay]), [
+    ['cycle1', '第一クール', 1, 91],
+    ['cycle2', '第二クール', 92, 182],
+    ['cycle3', '第三クール', 183, null],
+  ]);
+  assert.deepEqual(cycles.map((c) => c.totalMinutes), [10, 50, 40]);
+  // 全期間の合計 = 各クールの合計の和（クール間で取りこぼし・二重計上がない）
+  assert.equal(summarize(days).totalMinutes, cycles.reduce((a, c) => a + c.totalMinutes, 0));
+  assert.deepEqual(CYCLES.map((c) => c.fromDay), [1, 92, 183]);
+  assert.equal(makeDay(183, 0, 0, 0, 0, 0).date, '10/23'); // 第三クール1日目 = 2026-10-23
+});
+
+test('終了済みクール（Day1〜182）は Slack の再取得で上書きされず、未取得の日だけ埋まる', () => {
+  assert.equal(LOCKED_THROUGH_DAY, 182);
+  const existing = [makeDay(91, 1, 0, 0, 0, 0), makeDay(100, 10, 0, 0, 0, 0), makeDay(183, 30, 0, 0, 0, 0)];
+  const fetched = [
+    makeDay(91, 99, 0, 0, 0, 0),   // 第一クール: シードが正本 → 無視
+    makeDay(100, 99, 0, 0, 0, 0),  // 第二クール・既存あり → 守る
+    makeDay(182, 20, 0, 0, 0, 0),  // 第二クール・未取得 → 追加
+    makeDay(183, 40, 0, 0, 0, 0),  // 第三クール（進行中）→ 再投稿で上書き
+    makeDay(184, 50, 0, 0, 0, 0),  // 第三クール・新規 → 追加
+  ];
+  const merged = mergeFetchedDays(existing, fetched);
+  assert.deepEqual(merged.map((d) => [d.d, d.s]), [[91, 1], [100, 10], [182, 20], [183, 40], [184, 50]]);
 });

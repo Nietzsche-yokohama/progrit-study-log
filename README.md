@@ -8,7 +8,8 @@ Slack に投稿される学習ログを Cloudflare Worker が集計し、静的�
 - `public/index.html` — タブ切り替えシェル（週間面談／詳細）
 - `public/progrit.html` — 学習ダッシュボード（KPI・グラフ・インサイト）。index.html の「詳細」タブ
 - `public/progrit-weekly.html` — 進捗（日次／週次）。index.html の「週間面談」タブ
-- `public/dashboard.js` — 詳細／クール別3ページ共通の描画ロジック（科目一覧は Worker から受け取る）
+- `public/progrit-cycle1.html` / `progrit-cycle2.html` / `progrit-cycle3.html` — クール別実績（第一〜第三クール）。中身は同一で `DASHBOARD_CONFIG.cycleKey` だけ違う
+- `public/dashboard.js` — 詳細／クール別ページ共通の描画ロジック（科目一覧・クール範囲は Worker から受け取る）
 - `worker/index.ts` — `/api/progrit` のみを提供する Cloudflare Worker（Slack から取得・KV にキャッシュ）。科目レジストリ `SUBJECTS` もここ
 - `worker/index.test.ts` — パーサー・集計の回帰テスト（`npm test`）
 - `worker/progrit-seed.ts` — 第一クール（Day1〜91）の確定データ。過去データの恒久シードであり、第一クールの正本
@@ -59,13 +60,32 @@ Slack の投稿は `プログリットで学習N日目` の N を **そのクー
 第一クールから通算した番号に毎回手で書き直す運用（「48日目」→「139日目」）は廃止した。
 
 - 第一クール: Day1〜91（2026-04-24〜07-23）。終了済みで、今後いっさい変更しない。
-- 第二クール: 通算 Day92〜。投稿の「N日目」は通算 `N + 91` として集計される
-  （例: 「50日目」→ Day141）。従来どおり通算で「141日目」と書いても同じ結果になる。
+- 第二クール: Day92〜182（2026-07-24〜10-22）。投稿の「N日目」は通算 `N + 91` として集計される
+  （例: 「50日目」→ Day141）。Slack の「91日目」（Day182）が最終投稿。
+- 第三クール: Day183〜（2026-10-23〜）。Slack の「1日目」が Day183 として集計される
+  （通算 `N + 182`）。
 
 仕組みは `worker/index.ts` の `resolveAbsoluteDay`。投稿の「N日目」に対して各クールの
-開始日を基点にした候補（N、N+91、…）を作り、**投稿日時にいちばん近い実日付になる候補**を
-採る。候補同士は91日以上離れているので、数日〜数週間の後追い・まとめ投稿でも取り違えない。
-第三クールが始まったら `CYCLE_START_DAYS` に開始 Day を追加し、`buildCycles` にタブ定義を足す。
+開始日を基点にした候補（N、N+91、N+182、…）を作り、**投稿日時にいちばん近い実日付になる候補**を
+採る。候補同士は91日離れているので、数日〜数週間の後追い・まとめ投稿でも取り違えない
+（投稿日と実日付のずれが45日未満なら安全）。
+
+クールの定義は `worker/index.ts` の `CYCLES` 表の1か所だけ。次のクールが始まったら、
+①`CYCLES` に1行足して直前クールの `toDay` を埋める、②`public/progrit-cycleN.html` を
+1枚コピーして `cycleKey` を変える、③`public/index.html` にタブを足す、の3手順で済む。
+`/api/progrit` の `cycles[]` と `resolveAbsoluteDay` の候補はこの表から導かれる。
+
+### 終了したクールは Slack から上書きされない
+
+- **第一クール（Day1〜91）**: `worker/progrit-seed.ts` が正本。KV の内容がどうであれ毎回シードの値に戻す（下記）。
+- **第二クール（Day92〜182）**: KV に保存済みの値が正本。Slack の差分取得は **KV にまだ無い日を埋めるだけ**で、
+  既存の日は上書きしない（`worker/index.ts` の `mergeFetchedDays` / `LOCKED_THROUGH_DAY`）。
+  第三クール中に誤って「50日目」のつもりで通算番号などを書いても、第二クールの数字は動かない。
+  第二クールの数字を直したいときは、Slack への再投稿では反映されないので、KV を直接直すか
+  第一クールと同様にシード化する（`/api/progrit` の `days` から Day92〜182 を取り出せば作れる）。
+- **第三クール（Day183〜、進行中）**: 従来どおり同じ日番号の再投稿で上書き・訂正できる。
+
+次のクールが始まったら `CYCLES` の `toDay` を埋めるだけで、そのクールも自動的にロックされる。
 
 ### 第一クールはシードで固定（Slack から上書きされない）
 
