@@ -1,0 +1,55 @@
+name: Dump Slack history and KV master (one-off, for cycle2 seed)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  dump:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci
+      - name: Fetch full Slack history
+        run: |
+          node -e "
+            const TOKEN = process.env.SLACK_BOT_TOKEN;
+            (async () => {
+              let messages = []; let cursor = '';
+              do {
+                const params = new URLSearchParams({ channel: 'C08QDEH5H8V', limit: '200', oldest: '0' });
+                if (cursor) params.set('cursor', cursor);
+                const res = await fetch('https://slack.com/api/conversations.history?' + params, { headers: { Authorization: 'Bearer ' + TOKEN } });
+                const data = await res.json();
+                if (!data.ok) { console.error('slack error:', data.error); process.exit(1); }
+                messages = messages.concat(data.messages || []);
+                cursor = data.response_metadata?.next_cursor ?? '';
+              } while (cursor);
+              const slim = messages.map(m => ({ ts: m.ts, text: m.text, user: m.user, bot_id: m.bot_id, subtype: m.subtype, edited: m.edited }));
+              require('fs').mkdirSync('data-dump', { recursive: true });
+              require('fs').writeFileSync('data-dump/slack-history.json', JSON.stringify(slim, null, 1));
+              console.log('slack messages:', slim.length);
+            })();
+          "
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+      - name: Read current KV master
+        run: |
+          npx wrangler kv key get progrit_master_v7 --namespace-id=b9911ef74511411ba5c72b1071fcee9e --remote > data-dump/kv-master.json
+          node -e "const m=JSON.parse(require('fs').readFileSync('data-dump/kv-master.json','utf8')); console.log('kv days:', m.days.length, 'max:', Math.max(...m.days.map(d=>d.d)), 'lastMsgTs:', m.lastMsgTs)"
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Commit dumps to this branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data-dump
+          git commit -m "Add Slack history and KV master dump (one-off)"
+          git push origin HEAD
