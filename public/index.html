@@ -23,22 +23,22 @@
 <div class="lx-dash">
   <div class="lx-dash-bar">
     <div class="lx-dash-tabs">
-      <button class="lx-dash-tab lx-dash-tab-on" id="tab-weekly">週間面談</button>
-      <button class="lx-dash-tab" id="tab-detail">詳細</button>
       <button class="lx-dash-tab" id="tab-cycle1">第一クール</button>
       <button class="lx-dash-tab" id="tab-cycle2">第二クール</button>
       <button class="lx-dash-tab" id="tab-cycle3">第三クール</button>
+      <button class="lx-dash-tab" id="tab-detail">全体</button>
+      <button class="lx-dash-tab lx-dash-tab-on" id="tab-weekly">週間面談</button>
     </div>
   </div>
   <iframe class="lx-dash-frame" id="frame" src="/progrit-weekly.html" title="学習記録ダッシュボード"></iframe>
 </div>
 <script>
   const TABS = {
-    weekly: { src: '/progrit-weekly.html', btn: document.getElementById('tab-weekly') },
-    detail: { src: '/progrit.html', btn: document.getElementById('tab-detail') },
     cycle1: { src: '/progrit-cycle1.html', btn: document.getElementById('tab-cycle1') },
     cycle2: { src: '/progrit-cycle2.html', btn: document.getElementById('tab-cycle2') },
     cycle3: { src: '/progrit-cycle3.html', btn: document.getElementById('tab-cycle3') },
+    detail: { src: '/progrit.html', btn: document.getElementById('tab-detail') },
+    weekly: { src: '/progrit-weekly.html', btn: document.getElementById('tab-weekly') },
   };
   const frame = document.getElementById('frame');
   function setTab(key) {

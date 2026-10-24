@@ -5,8 +5,8 @@ Slack に投稿される学習ログを Cloudflare Worker が集計し、静的�
 
 ## 構成
 
-- `public/index.html` — タブ切り替えシェル（週間面談／詳細）
-- `public/progrit.html` — 学習ダッシュボード（KPI・グラフ・インサイト）。index.html の「詳細」タブ
+- `public/index.html` — タブ切り替えシェル（第一クール／第二クール／第三クール／全体／週間面談。初期表示は週間面談）
+- `public/progrit.html` — 学習ダッシュボード（KPI・グラフ・インサイト）。index.html の「全体」タブ
 - `public/progrit-weekly.html` — 進捗（日次／週次）。index.html の「週間面談」タブ
 - `public/progrit-cycle1.html` / `progrit-cycle2.html` / `progrit-cycle3.html` — クール別実績（第一〜第三クール）。中身は同一で `DASHBOARD_CONFIG.cycleKey` だけ違う
 - `public/dashboard.js` — 詳細／クール別ページ共通の描画ロジック（科目一覧・クール範囲は Worker から受け取る）
