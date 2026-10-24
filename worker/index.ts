@@ -45,13 +45,13 @@ export interface ProgritDay {
   dowIdx: number;
   // ── 固定科目（SUBJECTS と1対1対応。キー名はKV・シード・フロントで共有） ──
   s: number;  // シャドーイング
-  sp: number; // 意味理解（速読 + リピーティング。第三クールから PROGRIT のカテゴリ名で投稿）
-  o: number;  // 口頭英作文（Day130から「瞬間英作文」、第三クールから「文章化」）
+  sp: number; // 速読（第三クールからは PROGRIT のカテゴリ名「意味理解」もここ）
+  o: number;  // 口頭英作文（Day130から「瞬間英作文」、第三クールからは「文章化」もここ）
   v: number;  // 単語
-  li: number; // 多聴（第三クールから「概念化」）
+  li: number; // 多聴（第三クールからは「概念化」もここ）
   sc: number; // 1分間スピーチ（Day57から）
+  rp: number; // リピーティング（Day71から）
   oe: number; // オンライン英会話（Day149から）
-  rp?: number; // 旧キー: リピーティング（Day71〜Day182）。読み込み時に migrateLegacyDay が sp に合算して消す
   // ── 自動検出科目 ──
   // 固定科目のどれにも当てはまらなかった「科目名 N分」行を、正規化した科目名をキーに
   // そのまま集計する。Slackに新しい科目が増えても、コードを直さなくても集計・表示に
@@ -61,7 +61,7 @@ export interface ProgritDay {
 }
 
 // 固定科目のキー（ProgritDay の数値プロパティ名）
-export type SubjectKey = 's' | 'sp' | 'o' | 'v' | 'li' | 'sc' | 'oe';
+export type SubjectKey = 's' | 'sp' | 'o' | 'v' | 'li' | 'sc' | 'rp' | 'oe';
 
 export interface SubjectDef {
   key: SubjectKey;
@@ -81,15 +81,13 @@ export interface SubjectDef {
 //   - 過去に別名だった科目は pattern の選択肢で吸収する（口頭英作文→瞬間英作文）。
 // ─────────────────────────────────────────────────────────────────────────
 // 第三クール（Day183〜）からは Slack に PROGRIT アプリのカテゴリ名で投稿される
-// （「文章化(添削コース) 15分」「意味理解(添削コース) 43分」など）。カテゴリ名と従来の
-// 科目名の対応は次のとおりで、どちらの書き方でも同じ科目に合算する:
-//   音声知覚 = シャドーイング ／ 意味理解 = 速読 + リピーティング ／ 文章化 = 瞬間英作文
-//   単語 = 単語 ／ 概念化 = 多聴
+// （「文章化(添削コース) 15分」「意味理解(添削コース) 43分」など）。カテゴリ名は既存の
+// キーに合算する（キー・表示名は変えない。第一・第二クールの表示は従来のまま）:
+//   音声知覚 → s ／ 意味理解 → sp ／ 文章化 → o ／ 単語 → v ／ 概念化 → li
+// 第三クールのタブだけは、フロント側（dashboard.js の LABEL_OVERRIDES）でカテゴリ名を表示する。
 export const SUBJECTS: SubjectDef[] = [
   { key: 's',  label: 'シャドーイング', pattern: 'シャドーイング|音声知覚' },
-  // 速読（第一クール）とリピーティング（Day71〜）は PROGRIT では同じ「意味理解」カテゴリなので
-  // 1科目として扱う（旧キー rp は migrateLegacyDay で sp に合算）。
-  { key: 'sp', label: '意味理解',       pattern: '速読|リピーティング|意味理解' },
+  { key: 'sp', label: '速読',           pattern: '速読|意味理解' },
   // Day130から「口頭英作文」→「瞬間英作文」に改名。同一科目として o に合算する。
   { key: 'o',  label: '瞬間英作文',     pattern: '(?:口頭|瞬間)英作文|文章化' },
   { key: 'v',  label: '単語',           pattern: '単語' },
@@ -97,6 +95,7 @@ export const SUBJECTS: SubjectDef[] = [
   // 「1分間スピーチ」等の表記ゆれを拾うため「スピーチ」で照合する。
   // sumMin はキーワードの後ろの数字を読むので、前置きの「1分間」は誤検出しない。
   { key: 'sc', label: '1分間スピーチ',  pattern: 'スピーチ' },
+  { key: 'rp', label: 'リピーティング', pattern: 'リピーティング' },
   // Day149から追加。「英会話 30分」「オンライン英会話（Cambly）25分」のどちらも拾う。
   { key: 'oe', label: 'オンライン英会話', pattern: '(?:オンライン)?英会話' },
 ];
@@ -120,13 +119,12 @@ export function makeDay(
 ): ProgritDay {
   const dt = new Date(BASE_UTC + (d - 1) * 86400000);
   const dowIdx = dt.getUTCDay();
-  // rp（リピーティング。シードの列として残っている）は意味理解 sp に合算する。
   return {
     d,
     date: `${dt.getUTCMonth() + 1}/${dt.getUTCDate()}`,
     dow: DOW_JP[dowIdx],
     dowIdx,
-    s, sp: sp + rp, o, v, li, sc, oe, x,
+    s, sp, o, v, li, sc, rp, oe, x,
   };
 }
 
@@ -326,18 +324,16 @@ export function parseProgritMessages(messages: SlackMessage[]): ProgritDay[] {
 export function migrateLegacyDay(d: ProgritDay): ProgritDay {
   for (const s of SUBJECTS) if (typeof d[s.key] !== 'number') d[s.key] = 0;
   if (!d.x || typeof d.x !== 'object') d.x = {};
-  // 旧キー rp（リピーティング）は意味理解 sp に合算して消す
-  if (typeof d.rp === 'number') {
-    d.sp += d.rp;
-    delete d.rp;
-  }
   // 自動検出科目として保存済みの名前が、その後 固定科目の pattern に加わった場合は付け替える
   // （例: 「文章化」が固定科目になる前に KV に x:{文章化: N} で保存された日）。
-  for (const [label, min] of Object.entries(d.x)) {
-    const key = matchSubjectKey(label);
-    if (!key) continue;
-    d[key] += min;
-    delete d.x[label];
+  // 終了済みクール（Day1〜LOCKED_THROUGH_DAY）は表示を変えないため対象外。
+  if (d.d > LOCKED_THROUGH_DAY) {
+    for (const [label, min] of Object.entries(d.x)) {
+      const key = matchSubjectKey(label);
+      if (!key) continue;
+      d[key] += min;
+      delete d.x[label];
+    }
   }
   if (d.unknown && d.unknown.length > 0) {
     for (const u of d.unknown) {

@@ -166,7 +166,7 @@ test('終了済みクール（Day1〜182）は Slack の再取得で上書きさ
   assert.deepEqual(merged.map((d) => [d.d, d.s]), [[91, 1], [100, 10], [182, 20], [183, 40], [184, 50]]);
 });
 
-test('第三クールの PROGRIT カテゴリ名（文章化・意味理解・音声知覚…）を既存科目に紐付ける', () => {
+test('第三クールの PROGRIT カテゴリ名（文章化・意味理解・音声知覚…）を既存キーに紐付ける', () => {
   const ts = (m: number, d: number) => String(Date.UTC(2026, m - 1, d, 3) / 1000);
   const [d1, d2] = parseProgritMessages([post(`プログリットで学習1日目
 本日の学習内容：
@@ -192,29 +192,34 @@ test('第三クールの PROGRIT カテゴリ名（文章化・意味理解・�
   assert.deepEqual(d2.x, {});
   assert.equal(dayTotal(d2), 42);
 
-  // 概念化・単語も同様。カテゴリ名と従来名が同じ行にあっても二重に数えない
+  // 概念化・単語も同様。カテゴリ名と従来名は同じキーに合算され、リピーティングは従来どおり別キー
   const [d3] = parseProgritMessages([post(`プログリットで学習3日目
 　概念化(添削コース) 20分
 　単語(添削コース) 10分
-　意味理解(添削コース) リピーティング 30分
-　速読 5分`, ts(10, 25))]);
+　意味理解(添削コース) 30分
+　速読 5分
+　リピーティング 7分`, ts(10, 25))]);
   assert.equal(d3.li, 20);
   assert.equal(d3.v, 10);
   assert.equal(d3.sp, 35);
+  assert.equal(d3.rp, 7);
   assert.deepEqual(d3.x, {});
 });
 
-test('旧キー rp と、固定科目になる前に x に保存された科目は読み込み時に付け替える（冪等）', () => {
+test('固定科目になる前に x に保存された科目は、進行中クールの日だけ読み込み時に付け替える（冪等）', () => {
   const d = { ...makeDay(183, 0, 0, 0, 0, 0), x: { '文章化': 10, '音読': 7 } } as ProgritDay;
-  (d as { rp?: number }).rp = 8;
   migrateLegacyDay(d);
   assert.equal(d.o, 10);
-  assert.equal(d.sp, 8);
   assert.deepEqual(d.x, { '音読': 7 });
-  assert.equal((d as { rp?: number }).rp, undefined);
   migrateLegacyDay(d);
   assert.equal(d.o, 10);
-  assert.equal(d.sp, 8);
-  // シードの rp 列（リピーティング）は意味理解に合算される
-  assert.equal(makeDay(71, 0, 10, 0, 0, 0, 0, 25).sp, 35);
+  // 終了済みクール（第二クール）の日は表示を変えないので付け替えない
+  const old = { ...makeDay(150, 0, 0, 0, 0, 0), x: { '文章化': 10 } } as ProgritDay;
+  migrateLegacyDay(old);
+  assert.equal(old.o, 0);
+  assert.deepEqual(old.x, { '文章化': 10 });
+  // 速読とリピーティングは従来どおり別キー（第一・第二クールの表示は変えない）
+  const seed = makeDay(71, 0, 10, 0, 0, 0, 0, 25);
+  assert.equal(seed.sp, 10);
+  assert.equal(seed.rp, 25);
 });

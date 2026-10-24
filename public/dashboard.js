@@ -12,7 +12,7 @@
 // Slackに新しい科目が増えても、このファイルを直さなくても自動で表示に組み込まれる。
 
 const WORKER = 'https://progrit-study-log-worker.ybrnc777.workers.dev/api/progrit';
-const PAGE_VERSION = 'v2026.10.22（第三クール追加）';
+const PAGE_VERSION = 'v2026.10.25（第三クール追加）';
 
 // Worker側がBearer認証必須。トークンの保存・付与・入れ直しは auth.js の
 // fetchWithToken に集約してある（各HTMLが dashboard.js より先に読み込む）。
@@ -26,9 +26,14 @@ const SUBJECT_COLORS = {
 const FALLBACK_COLORS = ['#BA68C8', '#4DD0E1', '#AED581', '#FF8A65', '#7986CB', '#A1887F', '#90A4AE', '#DCE775'];
 const DOW_NAMES = ['日','月','火','水','木','金','土'];
 
-// Day130で「口頭英作文」は「瞬間英作文」に改名された（同一科目としてWorker側で o に合算済み）。
-// 改名前に終わった第一クール（Day1〜91）だけは当時の名称のまま表示する。
-const LABEL_OVERRIDES = DASHBOARD_CONFIG.cycleKey === 'cycle1' ? { o: '口頭英作文' } : {};
+// クール別の表示名。Worker の label（従来の科目名）はそのまま、タブごとに当時の呼び名で表示する。
+//   第一クール: Day130で「瞬間英作文」に改名される前なので「口頭英作文」
+//   第三クール: Slack に PROGRIT のカテゴリ名で投稿される（Worker 側で既存キーに合算）ので、
+//               カテゴリ名で表示する（意味理解 = sp）。第一・第二クールの表示は変えない。
+const LABEL_OVERRIDES = {
+  cycle1: { o: '口頭英作文' },
+  cycle3: { s: '音声知覚', sp: '意味理解', o: '文章化', li: '概念化' },
+}[DASHBOARD_CONFIG.cycleKey] || {};
 
 // summary.subjects を描画用の科目リストにする。
 //   { key, label, auto, color, min(r) -> その日の分数, total, firstDay, ... }
