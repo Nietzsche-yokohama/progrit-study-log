@@ -1,5 +1,6 @@
 import type { KVNamespace } from '@cloudflare/workers-types';
 import { PROGRIT_SEED, type SeedRow } from './progrit-seed';
+import { PROGRIT_SEED_CYCLE2, type SeedRow2 } from './progrit-seed-cycle2';
 
 export interface Env {
   PROGRIT_KV: KVNamespace;
@@ -131,6 +132,12 @@ export function makeDay(
 function makeDayFromRow(t: SeedRow): ProgritDay {
   return makeDay(t[0], t[1], t[2], t[3], t[4], t[5], t[6] ?? 0, t[7] ?? 0);
 }
+function makeDayFromRow2(t: SeedRow2): ProgritDay {
+  return makeDay(t[0], t[1], t[2], t[3], t[4], t[5], t[6], t[7], t[8], { ...(t[9] ?? {}) });
+}
+// シードで固定されている日（第一クール全体 + 第二クールのシード済みの日）。
+// これらは毎回シードの値に戻し、Slack の差分取得でも決して更新しない。
+const SEEDED_DAYS = new Set<number>([...PROGRIT_SEED.map((t) => t[0]), ...PROGRIT_SEED_CYCLE2.map((t) => t[0])]);
 
 // ─────────────────────────────────────────────────────────────────────────
 // クール定義（通算Dayの範囲）。1クール = 91日。
@@ -196,6 +203,7 @@ export function resolveAbsoluteDay(n: number, tsSec: number): number {
 export function applyLockedSeed(days: ProgritDay[]): ProgritDay[] {
   const map = new Map<number, ProgritDay>(days.map((d) => [d.d, d]));
   for (const t of PROGRIT_SEED) map.set(t[0], makeDayFromRow(t));
+  for (const t of PROGRIT_SEED_CYCLE2) map.set(t[0], makeDayFromRow2(t));
   return Array.from(map.values()).sort((a, b) => a.d - b.d);
 }
 
@@ -427,14 +435,13 @@ export function buildCycles(days: ProgritDay[]) {
 }
 
 // Slack から取得した日を KV の既存データにマージする。
-//   - Day1〜91（第一クール）: シードが正本。Slack の内容では一切更新しない。
-//   - Day92〜LOCKED_THROUGH_DAY（終了済みクール）: 既存の値を守る。KV にまだ無い日だけ追加する
-//     （最終日の投稿が未取得のまま確定した場合も、次の取得で埋まる）。
+//   - シード済みの日（第一クール全体、第二クールのシード済みの日）: シードが正本。Slack では一切更新しない。
+//   - それ以外の Day92〜LOCKED_THROUGH_DAY（終了済みクール）: 既存の値を守る。KV にまだ無い日だけ追加する。
 //   - それ以降（進行中のクール）: 同じ日番号の再投稿は新しい方で上書きする（従来どおり）。
 export function mergeFetchedDays(existing: ProgritDay[], fetched: ProgritDay[]): ProgritDay[] {
   const dayMap = new Map<number, ProgritDay>(existing.map((d) => [d.d, d]));
   for (const d of fetched) {
-    if (d.d <= CYCLE_BOUNDARY_DAY) continue;
+    if (d.d <= CYCLE_BOUNDARY_DAY || SEEDED_DAYS.has(d.d)) continue;
     if (d.d <= LOCKED_THROUGH_DAY && dayMap.has(d.d)) continue;
     dayMap.set(d.d, d);
   }

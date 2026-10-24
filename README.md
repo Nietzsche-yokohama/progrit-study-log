@@ -13,6 +13,7 @@ Slack に投稿される学習ログを Cloudflare Worker が集計し、静的�
 - `worker/index.ts` — `/api/progrit` のみを提供する Cloudflare Worker（Slack から取得・KV にキャッシュ）。科目レジストリ `SUBJECTS` もここ
 - `worker/index.test.ts` — パーサー・集計の回帰テスト（`npm test`）
 - `worker/progrit-seed.ts` — 第一クール（Day1〜91）の確定データ。過去データの恒久シードであり、第一クールの正本
+- `worker/progrit-seed-cycle2.ts` — 第二クール（Day92〜182）の確定データ。同じく正本（`scripts/build-cycle2-seed.ts` で生成）
 
 フロントは認証なし・ビルド不要（プレーンHTML）。バックエンドは元アプリの Worker から
 `/api/progrit` エンドポイントだけを抜き出したもので、状態同期・AI解説などの機能は含まない。
@@ -97,11 +98,12 @@ Slack の投稿は `プログリットで学習N日目` の N を **そのクー
 ### 終了したクールは Slack から上書きされない
 
 - **第一クール（Day1〜91）**: `worker/progrit-seed.ts` が正本。KV の内容がどうであれ毎回シードの値に戻す（下記）。
-- **第二クール（Day92〜182）**: KV に保存済みの値が正本。Slack の差分取得は **KV にまだ無い日を埋めるだけ**で、
-  既存の日は上書きしない（`worker/index.ts` の `mergeFetchedDays` / `LOCKED_THROUGH_DAY`）。
-  第三クール中に誤って「50日目」のつもりで通算番号などを書いても、第二クールの数字は動かない。
-  第二クールの数字を直したいときは、Slack への再投稿では反映されないので、KV を直接直すか
-  第一クールと同様にシード化する（`/api/progrit` の `days` から Day92〜182 を取り出せば作れる）。
+- **第二クール（Day92〜182）**: `worker/progrit-seed-cycle2.ts` が正本（第一クールと同じ扱い。
+  毎回シードの値に戻し、Slack の差分取得では更新しない）。2026-10-25 に、リピーティングを速読へ
+  合算する変更が一時的に本番へ出て KV 側のリピーティングが消えたため、Slack の全履歴（Day95〜182）と
+  KV（Day92〜94。Slack の90日保持で元投稿が消えていたが、当時はリピーティング未実施）から
+  `scripts/build-cycle2-seed.ts` で再生成した。Slack 再解釈と KV は速読／リピーティング以外すべて一致。
+  第二クールの数字を直したいときは KV ではなくこのシードを直す。
 - **第三クール（Day183〜、進行中）**: 従来どおり同じ日番号の再投稿で上書き・訂正できる。
 
 次のクールが始まったら `CYCLES` の `toDay` を埋めるだけで、そのクールも自動的にロックされる。

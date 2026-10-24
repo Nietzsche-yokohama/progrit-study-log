@@ -3,6 +3,7 @@
 // ここで固定しておく。
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { PROGRIT_SEED_CYCLE2 } from './progrit-seed-cycle2';
 import {
   parseProgritMessages, findExtraEntries, normalizeLabel, migrateLegacyDay,
   summarize, dayTotal, applyManualPosts, applyLockedSeed, makeDay, SUBJECTS,
@@ -152,18 +153,30 @@ test('cycles は第一〜第三クールを返し、Day182 は第二クール・
   assert.equal(makeDay(183, 0, 0, 0, 0, 0).date, '10/23'); // 第三クール1日目 = 2026-10-23
 });
 
-test('終了済みクール（Day1〜182）は Slack の再取得で上書きされず、未取得の日だけ埋まる', () => {
+test('終了済みクール（Day1〜182）は Slack の再取得で上書きされず、シードに無い日だけ埋まる', () => {
   assert.equal(LOCKED_THROUGH_DAY, 182);
+  const seeded2 = new Set(PROGRIT_SEED_CYCLE2.map((t) => t[0]));
+  const unseeded = Array.from({ length: 91 }, (_, i) => 92 + i).filter((d) => !seeded2.has(d));
   const existing = [makeDay(91, 1, 0, 0, 0, 0), makeDay(100, 10, 0, 0, 0, 0), makeDay(183, 30, 0, 0, 0, 0)];
   const fetched = [
     makeDay(91, 99, 0, 0, 0, 0),   // 第一クール: シードが正本 → 無視
-    makeDay(100, 99, 0, 0, 0, 0),  // 第二クール・既存あり → 守る
-    makeDay(182, 20, 0, 0, 0, 0),  // 第二クール・未取得 → 追加
+    makeDay(100, 99, 0, 0, 0, 0),  // 第二クール・シード済み → 無視
+    makeDay(182, 20, 0, 0, 0, 0),  // 第二クール・シード済み（KVに無くても）→ 無視（applyLockedSeed が入れる）
+    ...unseeded.map((d) => makeDay(d, 7, 0, 0, 0, 0)), // 第二クール・シードに無い日 → 未取得なら追加
     makeDay(183, 40, 0, 0, 0, 0),  // 第三クール（進行中）→ 再投稿で上書き
     makeDay(184, 50, 0, 0, 0, 0),  // 第三クール・新規 → 追加
   ];
   const merged = mergeFetchedDays(existing, fetched);
-  assert.deepEqual(merged.map((d) => [d.d, d.s]), [[91, 1], [100, 10], [182, 20], [183, 40], [184, 50]]);
+  assert.deepEqual(
+    merged.map((d) => [d.d, d.s]),
+    [[91, 1], [100, 10], ...unseeded.map((d) => [d, 7]), [183, 40], [184, 50]].sort((a, b) => a[0] - b[0]),
+  );
+  assert.equal(seeded2.has(182), true);
+  // シード済みの日は KV の値がどうであれシードに戻る（リピーティングが復元される）
+  const day177 = applyLockedSeed([makeDay(177, 0, 35, 0, 0, 0)]).find((d) => d.d === 177)!;
+  assert.equal(day177.rp, 35);
+  assert.equal(day177.sp, 0);
+  assert.equal(day177.s, 47);
 });
 
 test('第三クールの PROGRIT カテゴリ名（文章化・意味理解・音声知覚…）を既存キーに紐付ける', () => {
@@ -222,4 +235,16 @@ test('固定科目になる前に x に保存された科目は、進行中ク�
   const seed = makeDay(71, 0, 10, 0, 0, 0, 0, 25);
   assert.equal(seed.sp, 10);
   assert.equal(seed.rp, 25);
+});
+
+test('第二クールのシード行は KV の値より優先され、Slack の再取得でも更新されない', () => {
+  // プレースホルダーが空でも成立するよう、シード形式の行を直接 applyLockedSeed 相当で検証する
+  const seeded = makeDay(150, 1, 2, 3, 4, 5, 6, 7, 8, { '音読': 9 });
+  assert.equal(seeded.rp, 7);
+  assert.equal(seeded.oe, 8);
+  assert.deepEqual(seeded.x, { '音読': 9 });
+  assert.equal(dayTotal(seeded), 45);
+  // 第一クールのシードは従来どおり KV を上書きする
+  const restored = applyLockedSeed([makeDay(48, 999, 0, 0, 0, 0)]).find((d) => d.d === 48)!;
+  assert.notEqual(restored.s, 999);
 });
