@@ -223,3 +223,15 @@ test('固定科目になる前に x に保存された科目は、進行中ク�
   assert.equal(seed.sp, 10);
   assert.equal(seed.rp, 25);
 });
+
+test('第二クールのシード行は KV の値より優先され、Slack の再取得でも更新されない', () => {
+  // プレースホルダーが空でも成立するよう、シード形式の行を直接 applyLockedSeed 相当で検証する
+  const seeded = makeDay(150, 1, 2, 3, 4, 5, 6, 7, 8, { '音読': 9 });
+  assert.equal(seeded.rp, 7);
+  assert.equal(seeded.oe, 8);
+  assert.deepEqual(seeded.x, { '音読': 9 });
+  assert.equal(dayTotal(seeded), 45);
+  // 第一クールのシードは従来どおり KV を上書きする
+  const restored = applyLockedSeed([makeDay(48, 999, 0, 0, 0, 0)]).find((d) => d.d === 48)!;
+  assert.notEqual(restored.s, 999);
+});
