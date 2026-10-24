@@ -1,6 +1,8 @@
 name: Dump Slack history and KV master (one-off, for cycle2 seed)
 
 on:
+  push:
+    branches: [data-dump-cycle2]
   workflow_dispatch:
 
 permissions:
